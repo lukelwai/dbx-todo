@@ -18,7 +18,7 @@
  *   2. 侧车 RPC 走 dbxPlugin.invoke(method, params, { timeoutMs })；
  *      宿主方法走 dbxPlugin.request(method, params)。两者不可混用。
  *   3. 前端不碰磁盘（sandbox iframe opaque origin），唯一落盘通道是
- *      invoke() → Go 侧车 → .todo/todos.json。绝不在 localStorage 静默退化。
+ *      invoke() → Go 侧车 → .todo/todos.db。绝不在 localStorage 静默退化。
  *
  * 存储目录三层保险（与 dbx-md-notes 同范式）：
  *   a) connection/connect 把 storage_dir 交给侧车；
@@ -40,7 +40,7 @@
 
   /* ============ 诊断日志（页面级错误兜底 + 看门狗共用） ============ */
 
-  var UI_VERSION = "0.1.2";   // 打包脚本会校验它与 manifest.version 一致
+  var UI_VERSION = "0.1.3";   // 打包脚本会校验它与 manifest.version 一致
   var T0 = (window.performance && window.performance.now) ? window.performance.now() : Date.now();
   function since() {
     var t = (window.performance && window.performance.now) ? window.performance.now() : Date.now();

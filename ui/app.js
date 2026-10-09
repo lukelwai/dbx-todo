@@ -6,7 +6,7 @@
  *      一律走 click(id,fn) / on(id,ev,fn) 安全绑定 + 页面级 error 兜底。
  *   2. 永远不要把 $("字面量") 直接接属性访问——打包脚本会扫描并拒绝。
  *      读取用 val(id)，写入用 setVal(id,v)，它们内部把 id 当变量传。
- *   3. 所有数据落盘只走 window.TodoStore（storage.js → 侧车 → .todo/todos.json）。
+ *   3. 所有数据落盘只走 window.TodoStore（storage.js → 侧车 → .todo/todos.db）。
  * ==========================================================================
  */
 (function () {

@@ -16,6 +16,7 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -28,6 +29,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	_ "modernc.org/sqlite"
+
 	dbxpluginsdk "github.com/lwai/todo/dbxsdk"
 )
 
@@ -35,7 +38,7 @@ import (
 // pluginVersion 只是兜底；运行时以包内 manifest.json 的版本为准（见 resolveMetadata）。
 const (
 	pluginID      = "com.lwai.todo"
-	pluginVersion = "0.1.2"
+	pluginVersion = "0.1.3"
 )
 
 type plugin struct {
@@ -82,7 +85,7 @@ func (plugin *plugin) Handle(
 		}
 		return map[string]any{
 			"success": true,
-			"message": "待办 Todo 已就绪，数据将保存在「待办存储目录」下的 .todo/todos.json。",
+			"message": "待办 Todo 已就绪，数据将保存在「待办存储目录」下的 .todo/todos.db（SQLite）。",
 		}, nil
 
 	case "connection/connect":
@@ -157,7 +160,7 @@ func (plugin *plugin) Handle(
 		setDir(dir)
 		_ = os.MkdirAll(todoDir(), 0o755)
 		_ = os.MkdirAll(todoMetaDir(), 0o755)
-		return map[string]any{"ok": true, "path": todoPath(), "dir": todoDir()}, nil
+		return map[string]any{"ok": true, "path": todoDBPath(), "dir": todoDir()}, nil
 
 	case "todos/load":
 		return todosLoad()
@@ -248,7 +251,7 @@ func dataDir() string {
 }
 
 func todoMetaDir() string { return filepath.Join(todoDir(), ".todo") }
-func todoPath() string    { return filepath.Join(todoMetaDir(), "todos.json") }
+func todoDBPath() string  { return filepath.Join(todoMetaDir(), "todos.db") }
 
 func sidecarTrace(msg string) {
 	path := filepath.Join(dataDir(), "sidecar-trace.log")
@@ -400,7 +403,9 @@ type TodoTask struct {
 	Subtasks    []TodoSub `json:"subtasks"`
 }
 
-// TodoDoc 是落盘文档（_rev 是内部并发版本号，不参与展示）。
+// TodoDoc 是前端收发的整体文档（_rev 是内部并发版本号，不参与展示）。
+// 底层存储是 SQLite 关系表（groups / tasks / subtasks / meta），本结构体只是
+// 它们之间的「组装视图」——既保留前端熟悉的单文档协议，又方便后续直接基于表扩展。
 type TodoDoc struct {
 	Rev     int         `json:"_rev"`
 	Version int         `json:"version"`
@@ -408,84 +413,342 @@ type TodoDoc struct {
 	Tasks   []TodoTask  `json:"tasks"`
 }
 
-func loadDoc() (TodoDoc, error) {
-	b, err := os.ReadFile(todoPath())
+// openDB 打开（必要时创建）SQLite 数据库并执行迁移。返回值 created 表示
+// 本次调用是否新建了数据库文件，用于向前端标记首次运行（firstRun）。
+func openDB() (*sql.DB, bool, error) {
+	dir := todoMetaDir()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, false, fmt.Errorf("创建 .todo 目录失败：%w", err)
+	}
+	p := todoDBPath()
+	created := false
+	if _, statErr := os.Stat(p); statErr != nil {
+		created = true
+	}
+	db, err := sql.Open("sqlite", p)
 	if err != nil {
-		return TodoDoc{Version: 1, Groups: []TodoGroup{}, Tasks: []TodoTask{}}, err
+		return nil, false, fmt.Errorf("打开数据库失败：%w", err)
 	}
-	var d TodoDoc
-	if err := json.Unmarshal(b, &d); err != nil {
-		return TodoDoc{Version: 1, Groups: []TodoGroup{}, Tasks: []TodoTask{}}, err
+	db.SetMaxOpenConns(1)
+	db.SetConnMaxLifetime(0)
+	if err := migrateDB(db); err != nil {
+		_ = db.Close()
+		return nil, false, err
 	}
-	if d.Groups == nil {
-		d.Groups = []TodoGroup{}
-	}
-	if d.Tasks == nil {
-		d.Tasks = []TodoTask{}
-	}
-	for i := range d.Tasks {
-		if d.Tasks[i].Subtasks == nil {
-			d.Tasks[i].Subtasks = []TodoSub{}
-		}
-	}
-	return d, nil
+	return db, created, nil
 }
 
-func saveDoc(d TodoDoc) error {
-	if d.Version == 0 {
+func migrateDB(db *sql.DB) error {
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)`,
+		`CREATE TABLE IF NOT EXISTS groups (id TEXT PRIMARY KEY, name TEXT NOT NULL, ord INTEGER NOT NULL DEFAULT 0)`,
+		`CREATE TABLE IF NOT EXISTS tasks (
+			id TEXT PRIMARY KEY,
+			group_id TEXT,
+			title TEXT NOT NULL,
+			description TEXT,
+			priority TEXT,
+			start_at TEXT,
+			due_at TEXT,
+			done INTEGER NOT NULL DEFAULT 0,
+			done_at TEXT,
+			created_at TEXT,
+			updated_at TEXT
+		)`,
+		`CREATE TABLE IF NOT EXISTS subtasks (
+			id TEXT PRIMARY KEY,
+			task_id TEXT NOT NULL,
+			title TEXT NOT NULL,
+			done INTEGER NOT NULL DEFAULT 0,
+			done_at TEXT,
+			is_milestone INTEGER NOT NULL DEFAULT 0,
+			ord INTEGER NOT NULL DEFAULT 0
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_tasks_group ON tasks(group_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_subtasks_task ON subtasks(task_id)`,
+	}
+	for _, s := range stmts {
+		if _, err := db.Exec(s); err != nil {
+			return fmt.Errorf("migrate: %w", err)
+		}
+	}
+	_, _ = db.Exec(`INSERT OR IGNORE INTO meta(key,value) VALUES('rev','0'),('version','1')`)
+	return nil
+}
+
+// ns 把 *string 转成 database/sql 可识别的 NULL/值（nil 或空串都当 NULL）。
+func ns(p *string) any {
+	if p == nil {
+		return nil
+	}
+	s := *p
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
+// nullStrToPtr 把 sql.NullString 转成 *string（NULL → nil，方便填回模型字段）。
+func nullStrToPtr(v sql.NullString) *string {
+	if !v.Valid {
+		return nil
+	}
+	s := v.String
+	return &s
+}
+
+// nullStr 空串 → NULL，否则原值（用于普通可空文本列）。
+func nullStr(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
+func boolInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+func emptyDoc() TodoDoc {
+	return TodoDoc{Version: 1, Groups: []TodoGroup{}, Tasks: []TodoTask{}}
+}
+
+// loadDoc 从关系表组装出整体文档。created=true 表示数据库刚创建（首次运行）。
+func loadDoc() (TodoDoc, bool, error) {
+	db, created, err := openDB()
+	if err != nil {
+		return emptyDoc(), false, err
+	}
+	defer db.Close()
+
+	d := emptyDoc()
+	if err := db.QueryRow(`SELECT CAST(value AS INTEGER) FROM meta WHERE key='rev'`).Scan(&d.Rev); err != nil {
+		return emptyDoc(), created, fmt.Errorf("读取版本号失败：%w", err)
+	}
+	if err := db.QueryRow(`SELECT CAST(value AS INTEGER) FROM meta WHERE key='version'`).Scan(&d.Version); err != nil {
 		d.Version = 1
 	}
-	b, err := json.MarshalIndent(d, "", "  ")
+
+	gRows, err := db.Query(`SELECT id, name, ord FROM groups ORDER BY ord, id`)
 	if err != nil {
-		return err
+		return emptyDoc(), created, err
 	}
-	return writeAtomic(todoPath(), b)
+	for gRows.Next() {
+		var g TodoGroup
+		if err := gRows.Scan(&g.ID, &g.Name, &g.Order); err != nil {
+			gRows.Close()
+			return emptyDoc(), created, err
+		}
+		d.Groups = append(d.Groups, g)
+	}
+	gRows.Close()
+
+	// 先把子任务按所属任务分组，再挂到任务上（子任务表与任务表解耦存储，方便后续扩展）。
+	subByTask := map[string][]TodoSub{}
+	sRows, err := db.Query(`SELECT id, task_id, title, done, done_at, is_milestone, ord FROM subtasks ORDER BY ord, id`)
+	if err != nil {
+		return emptyDoc(), created, err
+	}
+	for sRows.Next() {
+		var s TodoSub
+		var taskID string
+		var done, ms int
+		var dat sql.NullString
+		if err := sRows.Scan(&s.ID, &taskID, &s.Title, &done, &dat, &ms, &s.Order); err != nil {
+			sRows.Close()
+			return emptyDoc(), created, err
+		}
+		s.Done = done != 0
+		s.IsMilestone = ms != 0
+		s.DoneAt = dat.String
+		subByTask[taskID] = append(subByTask[taskID], s)
+	}
+	sRows.Close()
+
+	tRows, err := db.Query(`SELECT id, group_id, title, description, priority, start_at, due_at, done, done_at, created_at, updated_at FROM tasks ORDER BY updated_at, id`)
+	if err != nil {
+		return emptyDoc(), created, err
+	}
+	for tRows.Next() {
+		var t TodoTask
+		var gid, desc, prio sql.NullString
+		var sa, da, dat, ca, ua sql.NullString
+		var done int
+		if err := tRows.Scan(&t.ID, &gid, &t.Title, &desc, &prio, &sa, &da, &done, &dat, &ca, &ua); err != nil {
+			tRows.Close()
+			return emptyDoc(), created, err
+		}
+		t.GroupID = gid.String
+		t.Description = desc.String
+		t.Priority = prio.String
+		t.StartAt = nullStrToPtr(sa)
+		t.DueAt = nullStrToPtr(da)
+		t.Done = done != 0
+		t.DoneAt = nullStrToPtr(dat)
+		t.CreatedAt = ca.String
+		t.UpdatedAt = ua.String
+		t.Subtasks = subByTask[t.ID]
+		if t.Subtasks == nil {
+			t.Subtasks = []TodoSub{}
+		}
+		d.Tasks = append(d.Tasks, t)
+	}
+	tRows.Close()
+
+	return d, created, nil
+}
+
+// saveDocToDB 把整体文档整体替换写入三张关系表（事务），返回递增后的 rev。
+// 并发防护：事务内读取的 rev 即提交基线，另一并发写入者被 SQLite 串行化，
+// 不会出现「旧快照覆盖新数据」（前端侧的 rev 回声检查在 todosSave 里）。
+func saveDocToDB(d TodoDoc) (int, error) {
+	db, _, err := openDB()
+	if err != nil {
+		return 0, err
+	}
+	defer db.Close()
+
+	tx, err := db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	var curRev int
+	if err := tx.QueryRow(`SELECT CAST(value AS INTEGER) FROM meta WHERE key='rev'`).Scan(&curRev); err != nil {
+		tx.Rollback()
+		return 0, err
+	}
+	if _, err := tx.Exec(`DELETE FROM subtasks`); err != nil {
+		tx.Rollback()
+		return 0, err
+	}
+	if _, err := tx.Exec(`DELETE FROM tasks`); err != nil {
+		tx.Rollback()
+		return 0, err
+	}
+	if _, err := tx.Exec(`DELETE FROM groups`); err != nil {
+		tx.Rollback()
+		return 0, err
+	}
+
+	gStmt, err := tx.Prepare(`INSERT INTO groups(id, name, ord) VALUES(?, ?, ?)`)
+	if err != nil {
+		tx.Rollback()
+		return 0, err
+	}
+	defer gStmt.Close()
+	for _, g := range d.Groups {
+		if _, err := gStmt.Exec(g.ID, g.Name, g.Order); err != nil {
+			tx.Rollback()
+			return 0, err
+		}
+	}
+
+	tStmt, err := tx.Prepare(`INSERT INTO tasks(id, group_id, title, description, priority, start_at, due_at, done, done_at, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	if err != nil {
+		tx.Rollback()
+		return 0, err
+	}
+	defer tStmt.Close()
+	for _, t := range d.Tasks {
+		if _, err := tStmt.Exec(
+			t.ID, nullStr(t.GroupID), t.Title, nullStr(t.Description), nullStr(t.Priority),
+			ns(t.StartAt), ns(t.DueAt), boolInt(t.Done), ns(t.DoneAt),
+			nullStr(t.CreatedAt), nullStr(t.UpdatedAt),
+		); err != nil {
+			tx.Rollback()
+			return 0, err
+		}
+	}
+
+	sStmt, err := tx.Prepare(`INSERT INTO subtasks(id, task_id, title, done, done_at, is_milestone, ord) VALUES(?, ?, ?, ?, ?, ?, ?)`)
+	if err != nil {
+		tx.Rollback()
+		return 0, err
+	}
+	defer sStmt.Close()
+	for ti := range d.Tasks {
+		for _, s := range d.Tasks[ti].Subtasks {
+			if _, err := sStmt.Exec(s.ID, d.Tasks[ti].ID, s.Title, boolInt(s.Done), nullStr(s.DoneAt), boolInt(s.IsMilestone), s.Order); err != nil {
+				tx.Rollback()
+				return 0, err
+			}
+		}
+	}
+
+	newRev := curRev + 1
+	if _, err := tx.Exec(`UPDATE meta SET value=? WHERE key='rev'`, newRev); err != nil {
+		tx.Rollback()
+		return 0, err
+	}
+	if _, err := tx.Exec(`UPDATE meta SET value='1' WHERE key='version'`); err != nil {
+		tx.Rollback()
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return newRev, nil
+}
+
+// currentRev 读取当前 rev（不依赖前端传入），用于并发防护比对与导入递增。
+func currentRev() (int, error) {
+	db, _, err := openDB()
+	if err != nil {
+		return 0, err
+	}
+	defer db.Close()
+	var rev int
+	if err := db.QueryRow(`SELECT CAST(value AS INTEGER) FROM meta WHERE key='rev'`).Scan(&rev); err != nil {
+		return 0, err
+	}
+	return rev, nil
 }
 
 func todosLoad() (any, *dbxpluginsdk.PluginError) {
-	_ = os.MkdirAll(todoMetaDir(), 0o755)
-	d, err := loadDoc()
-	if err != nil && !os.IsNotExist(err) {
+	d, created, err := loadDoc()
+	if err != nil {
 		return nil, failed(-32002, fmt.Errorf("读取待办数据失败：%w", err))
 	}
-	firstRun := os.IsNotExist(err)
 	doc := map[string]any{
 		"version": d.Version,
 		"groups":  d.Groups,
 		"tasks":   d.Tasks,
 	}
-	// 首次运行（没有文件）给前端一个空壳，让它去 seed 一个默认分组。
-	if firstRun {
+	// 首次运行（数据库刚创建）给前端一个空壳，让它去 seed 一个默认分组。
+	if created {
 		doc["groups"] = []TodoGroup{}
 		doc["tasks"] = []TodoTask{}
 	}
 	return map[string]any{
 		"data":       doc,
 		"rev":        d.Rev,
-		"path":       todoPath(),
+		"path":       todoDBPath(),
 		"dir":        todoDir(),
 		"ok":         true,
 		"configured": dirConfigured(),
-		"firstRun":   firstRun,
+		"firstRun":   created,
 	}, nil
 }
 
 // todosSave：带 rev 并发防护的原子写。incomingRev 是前端回声的版本号；
 // 若与当前不一致 → 拒绝并回传最新 rev，让前端重放（绝不直接覆盖对方数据）。
 func todosSave(incomingRevRaw json.RawMessage, dataRaw json.RawMessage) (any, *dbxpluginsdk.PluginError) {
-	cur, err := loadDoc()
-	if err != nil && !os.IsNotExist(err) {
+	curRev, err := currentRev()
+	if err != nil {
 		return nil, failed(-32002, fmt.Errorf("读取待办数据失败：%w", err))
 	}
 	var incomingRev int
 	if len(incomingRevRaw) > 0 {
 		_ = json.Unmarshal(incomingRevRaw, &incomingRev)
 	}
-	if !os.IsNotExist(err) && incomingRev != cur.Rev {
+	if incomingRev != curRev {
 		return map[string]any{
 			"ok":       false,
 			"conflict": true,
-			"newRev":   cur.Rev,
+			"newRev":   curRev,
 			"message":  "数据已被其它会话修改，请刷新后重试",
 		}, dbxpluginsdk.NewError(-32020, "数据已被其它会话修改，请刷新后重试")
 	}
@@ -500,7 +763,7 @@ func todosSave(incomingRevRaw json.RawMessage, dataRaw json.RawMessage) (any, *d
 	if incoming.Tasks == nil {
 		incoming.Tasks = []TodoTask{}
 	}
-	// 基本校验：分组 title 不为空、任务归属已知分组（缺失分组时归到第一个或置空）。
+	// 基本校验：任务归属已知分组（缺失分组时归到第一个）。
 	groupIDs := map[string]bool{}
 	for _, g := range incoming.Groups {
 		groupIDs[g.ID] = true
@@ -513,24 +776,20 @@ func todosSave(incomingRevRaw json.RawMessage, dataRaw json.RawMessage) (any, *d
 			incoming.Tasks[i].Subtasks = []TodoSub{}
 		}
 	}
-	incoming.Rev = cur.Rev + 1
 	incoming.Version = 1
-	if err := saveDoc(incoming); err != nil {
-		return nil, failed(-32002, fmt.Errorf("保存失败：%w", err))
+	newRev, serr := saveDocToDB(incoming)
+	if serr != nil {
+		return nil, failed(-32002, fmt.Errorf("保存失败：%w", serr))
 	}
 	sidecarTrace(fmt.Sprintf("todos/save ok dir=%s rev=%d groups=%d tasks=%d",
-		todoDir(), incoming.Rev, len(incoming.Groups), len(incoming.Tasks)))
-	return map[string]any{"ok": true, "rev": incoming.Rev, "path": todoPath(), "dir": todoDir()}, nil
+		todoDir(), newRev, len(incoming.Groups), len(incoming.Tasks)))
+	return map[string]any{"ok": true, "rev": newRev, "path": todoDBPath(), "dir": todoDir()}, nil
 }
 
 func todosExport() (any, *dbxpluginsdk.PluginError) {
-	d, err := loadDoc()
+	d, _, err := loadDoc()
 	if err != nil {
-		if !os.IsNotExist(err) {
-			return nil, failed(-32004, fmt.Errorf("读取待办数据失败：%w", err))
-		}
-		// 首次运行（还没有数据文件）导出空备份，而不是报错。
-		d = TodoDoc{Rev: 0, Version: 1, Groups: []TodoGroup{}, Tasks: []TodoTask{}}
+		return nil, failed(-32004, fmt.Errorf("读取待办数据失败：%w", err))
 	}
 	b, err := json.MarshalIndent(d, "", "  ")
 	if err != nil {
@@ -567,23 +826,20 @@ func todosImport(dataBase64 string) (any, *dbxpluginsdk.PluginError) {
 			d.Tasks[i].Subtasks = []TodoSub{}
 		}
 	}
-	// 导入 = 整体替换文档（语义同「恢复」），rev 自然递增，保证下一次保存不会因旧 rev 冲突。
-	cur, rerr := loadDoc()
-	if rerr != nil && !os.IsNotExist(rerr) {
-		return nil, failed(-32006, fmt.Errorf("读取当前数据失败：%w", rerr))
-	}
-	d.Rev = cur.Rev + 1
+	// 导入 = 整体替换文档（语义同「恢复」）。saveDocToDB 会在当前 rev 基础上递增，
+	// 保证下一次保存不会因旧 rev 冲突；导入是用户主动覆盖，不经前端 rev 回声检查。
 	d.Version = 1
-	if err := saveDoc(d); err != nil {
-		return nil, failed(-32006, fmt.Errorf("导入失败：%w", err))
+	newRev, serr := saveDocToDB(d)
+	if serr != nil {
+		return nil, failed(-32006, fmt.Errorf("导入失败：%w", serr))
 	}
 	sidecarTrace(fmt.Sprintf("todos/import ok dir=%s groups=%d tasks=%d", todoDir(), len(d.Groups), len(d.Tasks)))
 	return map[string]any{
 		"ok":     true,
-		"rev":    d.Rev,
+		"rev":    newRev,
 		"groups": len(d.Groups),
 		"tasks":  len(d.Tasks),
-		"path":   todoPath(),
+		"path":   todoDBPath(),
 	}, nil
 }
 
