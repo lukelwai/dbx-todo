@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>待办 Todo</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="app">
+    <!-- 顶部工具栏 -->
+    <header id="topbar">
+      <div class="brand">
+        <svg id="brand-logo" width="22" height="22" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <defs><linearGradient id="brandg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#4f7cff"/><stop offset="1" stop-color="#3a5fd9"/></linearGradient></defs>
+          <rect x="20" y="14" width="88" height="100" rx="14" fill="url(#brandg)"/>
+          <rect x="34" y="30" width="60" height="70" rx="8" fill="#ffffff"/>
+          <rect x="44" y="42" width="34" height="6" rx="3" fill="#4f7cff"/>
+          <rect x="44" y="58" width="40" height="6" rx="3" fill="#c7d3f5"/>
+          <rect x="44" y="74" width="28" height="6" rx="3" fill="#c7d3f5"/>
+          <circle cx="40" cy="45" r="3" fill="#3a5fd9"/>
+          <path d="M37 72 l2 2 l4 -4" stroke="#2ecc71" stroke-width="2.4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M37 88 l2 2 l4 -4" stroke="#2ecc71" stroke-width="2.4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+
+        <span class="brand-name">待办 Todo</span>
+      </div>
+
+      <div class="search-wrap">
+        <input id="search-input" type="search" placeholder="搜索任务标题 / 描述…" autocomplete="off" />
+      </div>
+
+      <div class="view-toggle" role="tablist" aria-label="视图切换">
+        <button id="btn-view-list" class="vt-btn active" type="button" role="tab" aria-selected="true">列表</button>
+        <button id="btn-view-calendar" class="vt-btn" type="button" role="tab" aria-selected="false">日历</button>
+      </div>
+
+      <div class="topbar-actions">
+        <button id="btn-add-task" class="primary" type="button">+ 新建任务</button>
+        <div class="more-wrap">
+          <button id="btn-more" class="ghost" type="button" aria-haspopup="true" aria-expanded="false">⋯</button>
+          <div id="more-menu" class="more-menu" hidden>
+            <button id="btn-add-group" class="menu-item" type="button">新建分组</button>
+            <button id="btn-import" class="menu-item" type="button">导入备份…</button>
+            <button id="btn-export" class="menu-item" type="button">导出备份</button>
+            <hr class="menu-sep" />
+            <button id="btn-diag" class="menu-item" type="button">查看存储诊断</button>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <!-- 主体：左侧分组树 + 右侧视图 -->
+    <div id="body">
+      <aside id="sidebar">
+        <div class="sidebar-head">
+          <span class="sidebar-title">分组</span>
+          <button id="btn-add-group-mini" class="icon-btn" type="button" title="新建分组">+</button>
+        </div>
+        <nav id="group-tree" class="group-tree" aria-label="任务分组"></nav>
+        <div id="sidebar-empty" class="sidebar-empty" hidden>还没有分组，点上方 + 创建。</div>
+      </aside>
+
+      <main id="main">
+        <!-- 列表视图 -->
+        <section id="main-list" class="view">
+          <div class="list-toolbar">
+            <div class="filter-chips" id="status-chips">
+              <button class="chip active" data-status="all" type="button">全部</button>
+              <button class="chip" data-status="notstarted" type="button">未开始</button>
+              <button class="chip" data-status="doing" type="button">进行中</button>
+              <button class="chip" data-status="overdue" type="button">已逾期</button>
+              <button class="chip" data-status="done" type="button">已完成</button>
+            </div>
+            <div class="list-tools-right">
+              <select id="priority-filter" class="select" aria-label="优先级过滤">
+                <option value="all">全部优先级</option>
+                <option value="high">高</option>
+                <option value="medium">中</option>
+                <option value="low">低</option>
+              </select>
+              <select id="sort-select" class="select" aria-label="排序方式">
+                <option value="created">按创建时间</option>
+                <option value="due">按截止时间</option>
+                <option value="priority">按优先级</option>
+                <option value="title">按标题</option>
+              </select>
+            </div>
+          </div>
+          <div id="list-content" class="list-content"></div>
+        </section>
+
+        <!-- 日历视图 -->
+        <section id="main-calendar" class="view" hidden>
+          <div class="cal-head">
+            <button id="cal-prev" class="icon-btn" type="button" title="上个月">‹</button>
+            <div id="cal-title" class="cal-title">—</div>
+            <button id="cal-next" class="icon-btn" type="button" title="下个月">›</button>
+            <button id="cal-today" class="ghost" type="button">今天</button>
+          </div>
+          <div id="cal-weekdays" class="cal-weekdays"></div>
+          <div id="cal-grid" class="cal-grid"></div>
+        </section>
+      </main>
+    </div>
+
+    <!-- 底部存储状态条 -->
+    <footer id="store-status" class="store-status">
+      <span id="store-text" class="store-text">存储：初始化中…</span>
+    </footer>
+
+    <!-- 任务编辑弹框 -->
+    <div id="task-modal" class="modal" hidden>
+      <div class="modal-backdrop" data-close="1"></div>
+      <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+        <div class="modal-head">
+          <h2 id="modal-title">新建任务</h2>
+          <button id="btn-close-modal" class="icon-btn" type="button" title="关闭">✕</button>
+        </div>
+        <form id="task-form" class="modal-body" autocomplete="off">
+          <label class="field">
+            <span class="field-label">标题 <em>*</em></span>
+            <input id="f-title" class="input" type="text" maxlength="200" placeholder="例如：完成季度报告" required />
+          </label>
+
+          <label class="field">
+            <span class="field-label">描述</span>
+            <textarea id="f-desc" class="textarea" rows="3" maxlength="4000" placeholder="补充说明、链接、备注…"></textarea>
+          </label>
+
+          <div class="field-row">
+            <label class="field">
+              <span class="field-label">优先级</span>
+              <select id="f-priority" class="select">
+                <option value="high">高</option>
+                <option value="medium" selected>中</option>
+                <option value="low">低</option>
+              </select>
+            </label>
+            <label class="field">
+              <span class="field-label">所属分组</span>
+              <select id="f-group" class="select"></select>
+            </label>
+          </div>
+
+          <div class="field-row">
+            <label class="field">
+              <span class="field-label">开始时间</span>
+              <input id="f-start" class="input" type="datetime-local" />
+            </label>
+            <label class="field">
+              <span class="field-label">截止时间</span>
+              <input id="f-due" class="input" type="datetime-local" />
+            </label>
+          </div>
+
+          <div class="field">
+            <div class="field-label-row">
+              <span class="field-label">子任务 / 里程碑</span>
+              <button id="btn-add-sub" class="ghost sm" type="button">+ 添加子任务</button>
+            </div>
+            <div id="f-subtasks" class="subtasks"></div>
+          </div>
+
+          <div class="modal-foot">
+            <button id="btn-delete-task" class="danger" type="button" hidden>删除任务</button>
+            <span class="foot-spacer"></span>
+            <button id="btn-cancel-task" class="ghost" type="button">取消</button>
+            <button id="btn-save-task" class="primary" type="button">保存</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- 轻提示 -->
+    <div id="toast" class="toast" hidden></div>
+
+    <!-- 导入文件（隐藏） -->
+    <input id="file-input" type="file" accept="application/json,.json" hidden />
+  </div>
+
+  <script src="storage.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

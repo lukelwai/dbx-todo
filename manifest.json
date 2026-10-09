@@ -1,0 +1,98 @@
+{
+  "$schema": "https://raw.githubusercontent.com/t8y2/dbx/main/plugins/manifest.schema.json",
+  "manifest_version": 1,
+  "id": "com.lwai.todo",
+  "name": "待办 Todo",
+  "version": "0.1.2",
+  "publisher": "lwai",
+  "description": "轻量待办（Todo）插件：分组管理任务，支持优先级、起止时间、子任务与里程碑、完成度进度条，以及列表 / 日历双视图。数据落盘到连接配置里选择的「待办存储目录」下的 .todo/todos.json，由侧车原子写入。",
+  "icon": "assets/plugin.svg",
+  "engines": {
+    "dbx": ">=0.5.68",
+    "host_api": "1"
+  },
+  "permissions": [],
+  "entrypoints": {
+    "ui": {
+      "root": "ui",
+      "entry": "ui/index.html"
+    },
+    "backend": {
+      "executable": "bin/dbx-plugin-todo"
+    }
+  },
+  "contributions": [
+    {
+      "type": "workbench",
+      "id": "com.lwai.todo.main",
+      "label": "待办 Todo",
+      "description": "待办工作台",
+      "icon": "assets/plugin.svg"
+    },
+    {
+      "type": "connection-provider",
+      "id": "com.lwai.todo.conn",
+      "label": "待办 Todo",
+      "description": "创建一个待办连接，用于打开独立的待办工作台并选择数据存储目录。",
+      "icon": "assets/plugin.svg",
+      "database_type": "todo",
+      "workbench": "com.lwai.todo.main",
+      "capabilities": [
+        "test",
+        "connect",
+        "disconnect"
+      ],
+      "fields": [
+        {
+          "key": "display_name",
+          "label": "连接名称",
+          "type": "text",
+          "binding": "name",
+          "required": true,
+          "default": "待办 Todo",
+          "description": "显示在连接列表中的名称。"
+        },
+        {
+          "key": "storage_dir",
+          "label": "待办存储目录",
+          "type": "text",
+          "binding": "config",
+          "required": true,
+          "default": "",
+          "placeholder": "例如：D:\\todo",
+          "description": "必填。侧车会把所有分组 / 任务 / 子任务写成该目录下的 .todo/todos.json（单文件、原子写入）。点击右侧文件夹按钮选择本地目录，或手动填写绝对路径。",
+          "picker": {
+            "kind": "directory"
+          }
+        }
+      ]
+    }
+  ],
+  "localizations": {
+    "en": {
+      "name": "Todo",
+      "description": "Lightweight Todo plugin with groups, priorities, due dates, subtasks and milestones, plus list/calendar views. Data is persisted by the sidecar into the .todo/todos.json file under the chosen storage directory.",
+      "contributions": {
+        "com.lwai.todo.main": {
+          "label": "Todo",
+          "description": "Todo workbench"
+        },
+        "com.lwai.todo.conn": {
+          "label": "Todo",
+          "description": "Create a Todo connection to open a standalone Todo workbench and choose a data directory.",
+          "fields": {
+            "display_name": {
+              "label": "Connection name",
+              "description": "Name shown in the connection list."
+            },
+            "storage_dir": {
+              "label": "Todo storage directory",
+              "description": "Required. The sidecar writes everything into .todo/todos.json under this directory. Click the folder button to pick a local directory, or type an absolute path.",
+              "placeholder": "e.g. /Users/me/todo"
+            }
+          }
+        }
+      }
+    }
+  }
+}

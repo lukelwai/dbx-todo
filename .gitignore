@@ -1,0 +1,20 @@
+# 本地构建缓存（沙箱内 GOCACHE/GOTMPDIR 必须指到项目内，避免被沙箱杀编译进程）
+/_gocache/
+/_gotmp/
+
+# 编译产物与打包产物
+/dist/
+/_xbuild/
+*.exe
+_dbx-plugin-todo
+
+# 校验/探测临时目录
+/_verify_tmp/
+
+# 节点依赖（脚本只用 node 内置模块，不需要 node_modules）
+/node_modules/
+
+# 系统/编辑器
+.DS_Store
+Thumbs.db
+.idea

@@ -1,0 +1,14 @@
+{
+  "id": "com.lwai.todo",
+  "name": "待办 Todo",
+  "displayName": "待办 Todo",
+  "version": "0.1.2",
+  "publisher": "lwai",
+  "description": "轻量待办（Todo）插件：分组管理任务，支持优先级、起止时间、子任务与里程碑、完成度进度条，以及列表 / 日历双视图。数据落盘到连接配置里选择的「待办存储目录」下的 .todo/todos.json。",
+  "icon": "assets/plugin.svg",
+  "permissions": [],
+  "category": "productivity",
+  "tags": ["todo", "task", "gtd", "productivity", "calendar"],
+  "homepage": "",
+  "repository": ""
+}

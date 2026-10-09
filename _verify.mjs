@@ -1,0 +1,299 @@
+// 校验 .dbxp：条目、manifest.executable、checksums 精确覆盖 + sha256、关键代码标记
+// 用法: node _verify.mjs [某个.dbxp]   不给参数时自动取 dist/ 下最新的那个，
+// 并拿它和源码 manifest.json 的版本比对（防止「验的是旧包」这种假绿）。
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import crypto from "node:crypto";
+import zlib from "node:zlib";
+import { removeTree, runProcess } from "./_testutil.mjs";
+
+const ROOT = "D:/core/web/dbx-pj/dbx-todo";
+const BINARY = "dbx-plugin-todo";
+const srcMani = JSON.parse(fs.readFileSync(path.join(ROOT, "manifest.json"), "utf8"));
+const srcVer = srcMani.version;
+const f = process.argv[2] || (() => {
+  const dir = path.join(ROOT, "dist");
+  const cands = fs.readdirSync(dir).filter((n) => n.endsWith(".dbxp"))
+    .map((n) => ({ n, t: fs.statSync(path.join(dir, n)).mtimeMs }))
+    .sort((a, b) => b.t - a.t);
+  if (!cands.length) { console.error("dist/ 下没有 .dbxp"); process.exit(2); }
+  return path.join(dir, cands[0].n);
+})();
+console.log("校验包: " + f + "\n源码 manifest.version = " + srcVer + "\n");
+const buf = fs.readFileSync(f);
+
+function entries(b) {
+  const out = [];
+  const off = b.length - 22;
+  if (b.readUInt32LE(off) !== 0x06054b50) throw new Error("not a zip");
+  const count = b.readUInt16LE(off + 10);
+  let p = b.readUInt32LE(off + 16);
+  for (let i = 0; i < count; i++) {
+    const nameLen = b.readUInt16LE(p + 28);
+    const extraLen = b.readUInt16LE(p + 30);
+    const commentLen = b.readUInt16LE(p + 32);
+    out.push({
+      name: b.slice(p + 46, p + 46 + nameLen).toString("utf8"),
+      method: b.readUInt16LE(p + 10),
+      csize: b.readUInt32LE(p + 20),
+      usize: b.readUInt32LE(p + 24),
+      lho: b.readUInt32LE(p + 42),
+      madeBy: b.readUInt16LE(p + 4),        // 高字节 = 制作系统（3 = Unix）
+      ext: b.readUInt32LE(p + 38),          // 外部属性：高 16 位 = Unix 权限
+    });
+    p += 46 + nameLen + extraLen + commentLen;
+  }
+  return out;
+}
+function read(e) {
+  const nameLen = buf.readUInt16LE(e.lho + 26);   // 本地头：26=文件名长度, 28=扩展长度
+  const extraLen = buf.readUInt16LE(e.lho + 28);
+  const start = e.lho + 30 + nameLen + extraLen;
+  const raw = buf.slice(start, start + e.csize);
+  return e.method === 8 ? zlib.inflateRawSync(raw) : raw;
+}
+
+const es = entries(buf);
+const has = (n) => es.some((e) => e.name === n);
+const get = (n) => { const e = es.find((x) => x.name === n); return e ? read(e) : null; };
+
+console.log("=== 包内条目 (" + es.length + ") ===");
+es.forEach((e) => console.log("  " + e.name + "  (" + e.usize + " B)"));
+
+const mani = JSON.parse(get("manifest.json").toString("utf8"));
+const exeRel = mani.entrypoints.backend.executable;
+const cks = JSON.parse(get("checksums.json").toString("utf8"));
+const inPkg = es.map((e) => e.name).filter((n) => n !== "checksums.json" && n !== "signature.json").sort();
+const listed = Object.keys(cks.files).sort();
+const mismatch = [];
+for (const e of es) {
+  if (e.name === "checksums.json") continue;
+  const h = crypto.createHash("sha256").update(read(e)).digest("hex");
+  if (cks.files[e.name] !== h) mismatch.push(e.name);
+}
+
+// 从文件名解析 target（<id>-<version>-<target>.dbxp），据此校验 executable 的路径与扩展名。
+// 只有 windows 目标带 .exe —— 对齐官方 CLI 的 executable_name()。
+const baseName = path.basename(f);
+const pkgPrefix = srcMani.id + "-" + srcMani.version + "-";
+const pkgTarget = baseName.startsWith(pkgPrefix) && baseName.endsWith(".dbxp")
+  ? baseName.slice(pkgPrefix.length, -".dbxp".length) : "";
+const exeSuffix = pkgTarget.startsWith("windows") ? ".exe" : "";
+const exeExpected = pkgTarget ? `bin/${pkgTarget}/${BINARY}${exeSuffix}` : "";
+
+/* ---- 把包内的侧车真的启动一次，用 JSON-RPC 问它四条 ----
+ * 这是"包里的二进制确实具备新能力"的唯一可靠证明（grep 字符串不可靠，见 dbx-plugin-dev 技能）。
+ * 但只能对**本机平台**的包执行：交叉编译出来的 darwin/linux 二进制在本机跑不了，
+ * 那种情况标记为 skip ——「交叉编译只保证字节正确，真机冒烟仍要各平台各跑一次」。
+ */
+const HOST_TARGET = (() => {
+  const osName = process.platform === "win32" ? "windows" : process.platform;   // darwin | linux | windows
+  const arch = process.arch === "arm64" ? "arm64" : "x64";
+  return `${osName}-${arch}`;
+})();
+
+async function probePackagedSidecar() {
+  const out = { ok: false, detail: "", versionOk: false, version: "", probeOk: false, probeDetail: "",
+    loadOk: false, loadDetail: "", exportOk: false, exportDetail: "", skip: false };
+  if (pkgTarget && pkgTarget !== HOST_TARGET) {
+    out.skip = true;
+    out.detail = `非本机平台（包=${pkgTarget} 本机=${HOST_TARGET}），无法执行 —— 需在该平台真机冒烟`;
+    return out;
+  }
+  const exeBytes = get(exeRel);
+  if (!exeBytes) { out.detail = "包内没有该 executable"; return out; }
+  // 落到【项目内】的临时目录，而不是 os.tmpdir()：本机沙箱里从系统 TEMP 直接执行新写入的
+  // exe 会一直 EBUSY（CreateProcess 起不来），而项目目录下的二进制执行是正常的。
+  const base = path.join(ROOT, "_verify_tmp", `probe-${process.pid}`);
+  const exePath = path.join(base, path.basename(exeRel));
+  // 待办存储目录：直接把 DBX_PLUGIN_DATA_DIR 指到它，todoDir() 自然落在这里。
+  const storeDir = path.join(base, "store");
+  try {
+    fs.mkdirSync(storeDir, { recursive: true });
+    fs.writeFileSync(exePath, exeBytes);
+    if (!exeRel.endsWith(".exe")) { fs.chmodSync(exePath, 0o755); }
+    const input = [
+      JSON.stringify({ jsonrpc: "2.0", id: "1", method: "plugin/initialize", params: { host: { protocolVersions: [1] } } }),
+      JSON.stringify({ jsonrpc: "2.0", id: "2", method: "todos/probe", params: { storage_dir: storeDir } }),
+      JSON.stringify({ jsonrpc: "2.0", id: "3", method: "todos/load", params: { storage_dir: storeDir } }),
+      JSON.stringify({ jsonrpc: "2.0", id: "4", method: "todos/export", params: { storage_dir: storeDir } }),
+    ].join("\n") + "\n";
+    // 侧车**必须用异步 spawn**（见 _testutil.mjs：本机沙箱里 spawnSync 对任何 exe 都 EBUSY）。
+    // 刚写出来的二进制还可能被杀软短暂锁住，所以带重试。
+    const env = { ...process.env, DBX_PLUGIN_DATA_DIR: storeDir };
+    const runProbe = () => runProcess(exePath, [], { env, input, timeoutMs: 60000 });
+    let r = await runProbe();
+    for (let i = 0; i < 4 && r.error && /EBUSY|EPERM|ETXTBSY|EACCES/.test(String(r.error.code || r.error.message)); i++) {
+      await new Promise((res) => setTimeout(res, 500));
+      r = await runProbe();
+    }
+    const replies = new Map();
+    String(r.out || "").split(/\r?\n/).forEach((line) => {
+      if (!line.trim()) return;
+      try {
+        const m = JSON.parse(line);
+        if (m && m.id != null) { replies.set(String(m.id), m); }
+      } catch { /* 非 JSON 行忽略 */ }
+    });
+    const init = replies.get("1");
+    if (init && init.result && init.result.plugin) {
+      out.ok = true;
+      out.version = init.result.plugin.version;
+      out.versionOk = out.version === mani.version;
+    } else if (init && init.error) {
+      out.detail = JSON.stringify(init.error).slice(0, 140);
+    } else {
+      // 把进程本身的错误也报出来：失败原因（EBUSY / 超时 / 权限）与"侧车不回话"完全是两回事。
+      const why = r.error ? ("进程启动/执行失败：" + r.error.message) : "没有回应";
+      out.detail = `${why}（exit=${r.code} signal=${r.signal || "-"} stderr=${String(r.err || "").slice(0, 140)}）`;
+    }
+    const pb = replies.get("2");
+    out.probeOk = !!pb && !pb.error && !!(pb.result && pb.result.ok);
+    out.probeDetail = pb
+      ? (pb.error ? JSON.stringify(pb.error).slice(0, 100) : "ok dir=" + ((pb.result || {}).dir || ""))
+      : "无响应";
+    const ld = replies.get("3");
+    out.loadOk = !!ld && !ld.error && !!(ld.result && typeof ld.result.rev === "number");
+    out.loadDetail = ld
+      ? (ld.error ? JSON.stringify(ld.error).slice(0, 100) : "rev=" + ((ld.result || {}).rev) + " firstRun=" + ((ld.result || {}).firstRun))
+      : "无响应";
+    const ex = replies.get("4");
+    out.exportOk = !!ex && !ex.error && !!(ex.result && typeof ex.result.dataBase64 === "string");
+    out.exportDetail = ex
+      ? (ex.error ? JSON.stringify(ex.error).slice(0, 100) : "bytes=" + ((ex.result || {}).bytes) + " tasks=" + ((ex.result || {}).count))
+      : "无响应";
+    return out;
+  } catch (e) {
+    out.detail = String((e && e.message) || e);
+    return out;
+  } finally {
+    removeTree(base);                 // 删掉 exe/store/config.json
+    removeTree(path.dirname(base));   // 顺手清掉空的 _verify_tmp
+  }
+}
+const probeExe = await probePackagedSidecar();
+const checks = [
+  ["manifest.version 与源码一致", mani.version === srcVer, mani.version + " vs " + srcVer],
+  ["manifest.id 与源码一致（防「验的是旧 id 的包」）", mani.id === srcMani.id, mani.id + " vs " + srcMani.id],
+  ["manifest.publisher 与源码一致", mani.publisher === srcMani.publisher, mani.publisher + " vs " + srcMani.publisher],
+  ["文件名里的 target 合法", /^[a-z0-9-]{1,64}$/.test(pkgTarget), pkgTarget || "(解析不出 target)"],
+  ["executable 指向 bin/<target>/<binary>[.exe]（windows 才带 .exe）",
+    exeRel === exeExpected, exeRel + (exeExpected ? " vs " + exeExpected : "")],
+  ["executable 在包内真实存在", has(exeRel)],
+  ["checksums.algorithm = sha256", cks.algorithm === "sha256", cks.algorithm],
+  ["checksums 精确覆盖包内文件", JSON.stringify(inPkg) === JSON.stringify(listed), "包内" + inPkg.length + " / 清单" + listed.length],
+  ["全部 sha256 匹配", mismatch.length === 0, mismatch.join(",")],
+  ["无 _ 前缀临时文件混入", !es.some((e) => /(^|\/)_/.test(e.name))],
+  // Unix 权限位：宿主 installer.rs 只在 entry.unix_mode() 有值时才 set_permissions，
+  // 而 zip crate 在 external_attributes==0（或制作系统不是 Unix）时返回 None
+  // → 解出来的文件是默认 0644 → **侧车没有可执行位，macOS/Linux 上起不来**。
+  ["制作系统声明为 Unix（否则权限位被忽略）", es.every((e) => (e.madeBy >> 8) === 3),
+    es.map((e) => e.madeBy >> 8).join(",")],
+  ["可执行文件带 0755 权限位", (() => {
+    const e = es.find((x) => x.name === exeRel);
+    return !!e && ((e.ext >> 16) & 0o777) === 0o755;
+  })(), (() => { const e = es.find((x) => x.name === exeRel); return e ? "0" + ((e.ext >> 16) & 0o777).toString(8) : "(无)"; })()],
+  ["普通文件带 0644 权限位", es.filter((e) => e.name !== exeRel).every((e) => ((e.ext >> 16) & 0o777) === 0o644)],
+];
+
+const st = get("ui/storage.js").toString("utf8");
+const ap = get("ui/app.js").toString("utf8");
+const ix = get("ui/index.html").toString("utf8");
+const cs = get("ui/styles.css").toString("utf8");
+const apCode = ap.replace(/\/\*[\s\S]*?\*\//g, "");   // 去注释再扫描
+// 判据与 _buildpkg.js 一致：`$("id").` 只在该 id 真实存在时才算安全
+const liveIds = new Set([...ix.replace(/<!--[\s\S]*?-->/g, "").matchAll(/\bid="([^"]+)"/g)].map((m) => m[1]));
+const dangling = [...new Set([...apCode.matchAll(/\$\("([^"]+)"\)\s*\./g)].map((m) => m[1]))]
+  .filter((id) => !liveIds.has(id));
+checks.push(
+  ["storage.js 以 window.dbxPlugin 为 API", st.includes("window.dbxPlugin")],
+  ["storage.js 不再把 ready 的值当 API", !/resolve\(\s*\w+\s*\|\|/.test(st)],
+  ["storage.js 用 invoke(method, payload, {timeoutMs})", /invoke\(method,\s*payload,\s*\{\s*timeoutMs/.test(st)],
+  ["storage.js 用 request('host.getContext') 兜底", st.includes('request("host.getContext"')],
+  ["storage.js 含会话内存后端（不伪装持久）", st.includes("memoryBackend")],
+  ["storage.js 导出诊断报告与看门狗", st.includes("report: report") && st.includes("看门狗")],
+  ["storage.js 的 UI_VERSION 与 manifest 一致",
+    (st.match(/var UI_VERSION = "([^"]+)"/) || [])[1] === srcVer,
+    (st.match(/var UI_VERSION = "([^"]+)"/) || [])[1]],
+
+  ["置顶诊断条已下线（HTML 里无可用 #diag-bar，诊断走菜单按钮）", !liveIds.has("diag-bar")],
+  ["app.js 开关 SHOW_DIAG_BAR=false", /var\s+SHOW_DIAG_BAR\s*=\s*false/.test(apCode)],
+  ["app.js 开关 ENABLE_IMPORT=true（导入入口在「更多」菜单）", /var\s+ENABLE_IMPORT\s*=\s*true/.test(apCode)],
+  ["导入入口真的在 HTML 里（#btn-import / #file-input）",
+    liveIds.has("btn-import") && liveIds.has("file-input")],
+  ["app.js 没有重复的函数声明（后者会静默覆盖前者）",
+    (() => {
+      const seen = {};
+      apCode.split(/\r?\n/).forEach((l) => {
+        const m = /^  function (\w+)\s*\(/.exec(l);
+        if (m) { seen[m[1]] = (seen[m[1]] || 0) + 1; }
+      });
+      return Object.keys(seen).filter((k) => seen[k] > 1).length === 0;
+    })()],
+  ["前端删除是「从状态移除后整体保存」，不依赖 deletedIds 推断删除",
+    ap.includes("saveAll()") && ap.includes("buildDoc()")],
+  ["app.js 用安全绑定 click()/on()（缺失元素不再连坐）",
+    apCode.includes("function click(id, fn)") && apCode.includes("function on(id, ev, fn)")],
+  ["app.js 没有对缺失元素直接取属性", dangling.length === 0, dangling.join(",")],
+  ["app.js 捕获页面级未处理异常", apCode.includes("unhandledrejection") && apCode.includes('window.addEventListener("error"')],
+  ["app.js 不再用 dbxPlugin.ready 卡住启动", !/dbxPlugin\.ready\.then\(boot\)/.test(apCode)],
+  ["双视图切换在 HTML 里（btn-view-list / btn-view-calendar）",
+    liveIds.has("btn-view-list") && liveIds.has("btn-view-calendar")],
+  ["「更多」菜单（btn-more / more-menu）在 HTML 里且能展开/收起",
+    liveIds.has("btn-more") && liveIds.has("more-menu") &&
+    ap.includes('"more-menu"') && ap.includes("aria-expanded")],
+  ["「更多」菜单显式声明 [hidden]（否则 display:flex 会顶掉默认隐藏）",
+    /\.more-menu\[hidden\]\s*\{[^}]*display:\s*none/.test(cs)],
+
+  /* ---- 权限与贡献点（刻意保持最小） ---- */
+  ["不依赖宿主内置 AI（manifest 未声明 host.ai）",
+    Array.isArray(mani.permissions) && !mani.permissions.includes("host.ai"), JSON.stringify(mani.permissions)],
+  ["manifest 刻意不声明 command / menus（会顶掉文件浏览入口，并把最低宿主抬到 0.6.21）",
+    !(mani.contributions || []).some((c) => c.type === "command" || c.type === "menus"),
+    (mani.contributions || []).map((c) => c.type).join(" / ")],
+  ["engines.dbx 保持 >=0.5.68（没有为了新贡献点抬高）",
+    String(mani.engines && mani.engines.dbx) === ">=0.5.68", JSON.stringify(mani.engines)],
+  ["本地化键都能对上真实贡献点 id（宿主会把对不上的键判为无效清单）",
+    (() => {
+      const loc = mani.localizations && mani.localizations.en;
+      if (!loc || !loc.contributions) { return false; }
+      const ids = new Set((mani.contributions || []).map((c) => c.id));
+      return Object.keys(loc.contributions).every((k) => ids.has(k));
+    })(),
+    Object.keys((mani.localizations && mani.localizations.en && mani.localizations.en.contributions) || {}).join(", ")],
+
+  [".dbx-store.json 的 permissions / name 与 manifest 一致（商店会比对）",
+    (() => {
+      try {
+        const pub = JSON.parse(fs.readFileSync(path.join(ROOT, ".dbx-store.json"), "utf8"));
+        return JSON.stringify(pub.permissions) === JSON.stringify(mani.permissions) && pub.name === mani.name;
+      } catch { return false; }
+    })(),
+    (() => {
+      try { const pub = JSON.parse(fs.readFileSync(path.join(ROOT, ".dbx-store.json"), "utf8")); return pub.name + " / " + JSON.stringify(pub.permissions); } catch { return "(读不到)"; }
+    })()],
+
+  /* ---- 包内二进制「真跑一次」（仅本机平台；跨平台包无法执行，标记为 SKIP） ---- */
+  ["包内侧车能启动并完成 plugin/initialize", probeExe.ok, probeExe.detail, probeExe.skip ? "skip" : ""],
+  ["包内侧车自报版本与 manifest 一致", probeExe.versionOk, probeExe.version, probeExe.skip ? "skip" : ""],
+  ["包内侧车支持 todos/probe（写盘通道可用）", probeExe.probeOk, probeExe.probeDetail, probeExe.skip ? "skip" : ""],
+  ["包内侧车支持 todos/load（读能力 + rev/firstRun）", probeExe.loadOk, probeExe.loadDetail, probeExe.skip ? "skip" : ""],
+  ["包内侧车支持 todos/export（导出能力真的在包里）", probeExe.exportOk, probeExe.exportDetail, probeExe.skip ? "skip" : ""],
+);
+
+console.log("=== 校验 ===");
+let fails = 0;
+let skips = 0;
+for (const [name, ok, extra, mode] of checks) {
+  if (mode === "skip") {
+    skips++;
+    console.log("  SKIP  " + name + (extra ? "  |  " + extra : ""));
+    continue;
+  }
+  if (!ok) fails++;
+  console.log("  " + (ok ? "PASS" : "FAIL") + "  " + name + (extra ? "  |  " + extra : ""));
+}
+console.log("\nRESULT: " + (fails ? "FAIL(" + fails + ")" : "PASS") +
+  (skips ? "（另有 " + skips + " 项因非本机平台跳过）" : ""));
+process.exit(fails ? 1 : 0);
