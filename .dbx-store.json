@@ -1,14 +1,11 @@
 {
-  "id": "com.lwai.todo",
   "name": "待办 Todo",
-  "displayName": "待办 Todo",
-  "version": "0.1.4",
-  "publisher": "lwai",
   "description": "轻量待办（Todo）插件：分组管理任务，支持优先级、起止时间、子任务与里程碑、完成度进度条，以及列表 / 日历双视图。",
+  "tags": ["todo", "task", "gtd", "productivity", "calendar"],
   "icon": "assets/plugin.svg",
   "permissions": [],
-  "category": "productivity",
-  "tags": ["todo", "task", "gtd", "productivity", "calendar"],
-  "homepage": "",
-  "repository": ""
+  "source": "https://github.com/lukelwai/dbx-todo",
+  "homepage": "https://github.com/lukelwai/dbx-todo",
+  "license": "Apache-2.0",
+  "releaseNotes": "Initial release."
 }
