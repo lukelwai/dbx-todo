@@ -108,9 +108,9 @@ if (badRefs.length) {
 
 // (b) 关键 UI 节点必须在 index.html 里真实存在
 const CRITICAL = [
-  "app", "search-input", "btn-view-list", "btn-view-calendar", "btn-add-task",
+  "app", "search-input", "btn-view-list", "btn-view-calendar", "btn-view-board", "btn-add-task",
   "btn-more", "more-menu", "btn-add-group", "btn-import", "btn-export",
-  "group-tree", "main-list", "list-content", "main-calendar", "cal-grid",
+  "group-tree", "main-list", "list-content", "main-calendar", "main-board", "cal-grid",
   "store-status", "store-text", "task-modal", "task-form", "f-title", "f-group",
   "f-priority", "f-start", "f-due", "btn-add-sub", "f-subtasks", "btn-save-task",
   "toast", "file-input",

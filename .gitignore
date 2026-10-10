@@ -18,3 +18,5 @@ _dbx-plugin-todo
 .DS_Store
 Thumbs.db
 .idea
+.gocache
+.gotmp

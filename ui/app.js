@@ -153,7 +153,9 @@
   function render() {
     applyTheme();
     renderSidebar();
-    if (state.ui.view === "list") renderList(); else renderCalendar();
+    if (state.ui.view === "list") renderList();
+    else if (state.ui.view === "calendar") renderCalendar();
+    else renderBoard();
     renderStoreText();
   }
 
@@ -209,12 +211,10 @@
   }
 
   /* ============ 列表视图 ============ */
-  function filteredTasks() {
-    var now = Date.now();
+  function baseFiltered() {
     var q = state.ui.search.trim().toLowerCase();
-    var list = state.tasks.filter(function (t) {
+    return state.tasks.filter(function (t) {
       if (state.ui.group && t.groupId !== state.ui.group) return false;
-      if (state.ui.status !== "all" && taskStatus(t, now) !== state.ui.status) return false;
       if (state.ui.priority !== "all" && t.priority !== state.ui.priority) return false;
       if (q) {
         var hay = (t.title + " " + (t.description || "")).toLowerCase();
@@ -222,6 +222,14 @@
       }
       return true;
     });
+  }
+
+  function filteredTasks() {
+    var now = Date.now();
+    var list = baseFiltered();
+    if (state.ui.status !== "all") {
+      list = list.filter(function (t) { return taskStatus(t, now) === state.ui.status; });
+    }
     list.sort(function (a, b) {
       if (state.ui.sort === "due") {
         var da = a.dueAt ? new Date(a.dueAt).getTime() : Infinity;
@@ -322,15 +330,20 @@
       detail.appendChild(sl);
     }
 
+    var hasDesc = !!(t.description && t.description.trim());
+    var expandable = hasDesc || prog.total > 0;
+    var rowProps = { class: "task-row1" + (expandable ? " expandable" : "") };
+    if (expandable) rowProps.dataset = { toggle: t.id };
+    var rowKids = [];
+    if (expandable) rowKids.push(h("span", { class: "task-chevron" }, "▸"));
+    rowKids.push(h("input", { class: "task-check", type: "checkbox", checked: !!t.done, dataset: { check: t.id } }));
+    rowKids.push(h("div", { class: "task-main" }, [
+      h("div", { class: "task-title" }, t.title),
+      meta,
+      progress
+    ]));
     var card = h("div", { class: "task-card" + (t.done ? " done" : ""), dataset: { tid: t.id } }, [
-      h("div", { class: "task-row1" }, [
-        h("input", { class: "task-check", type: "checkbox", checked: !!t.done, dataset: { check: t.id } }),
-        h("div", { class: "task-main" }, [
-          h("div", { class: "task-title", dataset: { toggle: t.id } }, t.title),
-          meta,
-          progress
-        ])
-      ]),
+      h("div", rowProps, rowKids),
       actions,
       detail
     ]);
@@ -386,6 +399,74 @@
         }
       }, cellChildren));
     }
+  }
+
+  /* ============ 执行视图（看板） ============ */
+  function renderBoard() {
+    var root = $("board-content"); if (!root) return;
+    root.innerHTML = "";
+    if (state.tasks.length === 0) {
+      root.appendChild(emptyState("🗒️", "还没有任何任务", "点击右上角「新建任务」创建你的第一个待办。", true));
+      return;
+    }
+    var list = baseFiltered();
+    if (list.length === 0) {
+      root.appendChild(emptyState("🔍", "没有匹配的任务", "试着调整搜索词或优先级筛选。", false));
+      return;
+    }
+    var cols = [
+      { key: "notstarted", label: "未开始" },
+      { key: "doing", label: "进行中" },
+      { key: "overdue", label: "已逾期" },
+      { key: "done", label: "已完成" }
+    ];
+    var now = Date.now();
+    cols.forEach(function (col) {
+      var items = list.filter(function (t) { return taskStatus(t, now) === col.key; });
+      items.sort(function (a, b) {
+        var pa = PRIORITY_RANK[a.priority] != null ? PRIORITY_RANK[a.priority] : 9;
+        var pb = PRIORITY_RANK[b.priority] != null ? PRIORITY_RANK[b.priority] : 9;
+        if (pa !== pb) return pa - pb;
+        var da = a.dueAt ? new Date(a.dueAt).getTime() : Infinity;
+        var db = b.dueAt ? new Date(b.dueAt).getTime() : Infinity;
+        return da - db;
+      });
+      var body = h("div", { class: "board-col-body" });
+      items.forEach(function (t) { body.appendChild(boardCard(t, now)); });
+      root.appendChild(h("div", { class: "board-col", dataset: { col: col.key } }, [
+        h("div", { class: "board-col-head" }, [
+          h("span", { class: "board-col-dot s-" + col.key }),
+          h("span", { class: "board-col-title" }, col.label),
+          h("span", { class: "board-col-count" }, String(items.length))
+        ]),
+        body
+      ]));
+    });
+  }
+
+  function boardCard(t, now) {
+    var pr = t.priority || "medium";
+    var prog = progressOf(t);
+    var kids = [
+      h("div", { class: "bc-top" }, [
+        h("span", { class: "bc-pri", style: "color:var(--pr-" + pr + ")" }, PRIORITY_LABEL[pr]),
+        (t.dueAt ? h("span", { class: "bc-due" }, "止 " + fmtDate(t.dueAt)) : null)
+      ]),
+      h("div", { class: "bc-title", dataset: { open: t.id } }, t.title),
+      (t.description ? h("div", { class: "bc-desc" }, t.description) : null)
+    ];
+    if (prog.total > 0) {
+      kids.push(h("div", { class: "bc-progress" }, [
+        h("div", { class: "progress-track" }, [h("div", { class: "progress-fill", style: "width:" + prog.pct + "%" })]),
+        h("div", { class: "bc-prog-label" }, prog.done + "/" + prog.total + " 子任务" + (prog.msTotal > 0 ? " · ★" + prog.msDone + "/" + prog.msTotal : ""))
+      ]));
+    }
+    kids.push(h("div", { class: "bc-actions" }, [
+      h("button", { type: "button", dataset: { act: "toggle", tid: t.id } }, t.done ? "↩ 重开" : "✓ 完成"),
+      h("button", { type: "button", dataset: { act: "edit", tid: t.id } }, "编辑"),
+      h("button", { type: "button", dataset: { act: "del", tid: t.id } }, "删除")
+    ]));
+    return h("div", { class: "board-card" + (t.done ? " done" : "") }, kids);
   }
 
   /* ============ 空状态 ============ */
@@ -672,6 +753,7 @@
   function wireEvents() {
     click("btn-view-list", function () { switchView("list"); });
     click("btn-view-calendar", function () { switchView("calendar"); });
+    click("btn-view-board", function () { switchView("board"); });
     on("search-input", "input", function (e) { state.ui.search = e.target.value; if (state.ui.view === "list") renderList(); });
     click("btn-add-task", function () { openTaskModal(null); });
     click("btn-add-group", addGroup);
@@ -728,9 +810,26 @@
       var tog = t.dataset && t.dataset.toggle ? t : (t.closest ? t.closest("[data-toggle]") : null);
       if (tog && tog.dataset && tog.dataset.toggle) {
         var did = "detail-" + tog.dataset.toggle;
-        var d = $(did); if (d) d.hidden = !d.hidden;
+        var d = $(did);
+        if (d) { d.hidden = !d.hidden; tog.classList.toggle("expanded", !d.hidden); }
         return;
       }
+    });
+
+    // 执行视图（看板）委托
+    var bc2 = $("board-content");
+    if (bc2) bc2.addEventListener("click", function (ev) {
+      var t = ev.target; if (!t) return;
+      var act = t.dataset && t.dataset.act ? t : (t.closest ? t.closest("[data-act]") : null);
+      if (act && act.dataset && act.dataset.act) {
+        var a = act.dataset.act;
+        if (a === "toggle") toggleTaskDone(act.dataset.tid);
+        else if (a === "edit") openTaskModal(act.dataset.tid);
+        else if (a === "del") deleteTask(act.dataset.tid);
+        return;
+      }
+      var op = t.dataset && t.dataset.open ? t : (t.closest ? t.closest("[data-open]") : null);
+      if (op && op.dataset && op.dataset.open) { openTaskModal(op.dataset.open); }
     });
 
     // 日历翻页
@@ -755,12 +854,13 @@
 
   function switchView(v) {
     state.ui.view = v;
-    var listV = $("main-list"), calV = $("main-calendar");
-    var bl = $("btn-view-list"), bc = $("btn-view-calendar");
-    if (listV) listV.hidden = v !== "list";
-    if (calV) calV.hidden = v !== "calendar";
-    if (bl) { bl.classList.toggle("active", v === "list"); bl.setAttribute("aria-selected", String(v === "list")); }
-    if (bc) { bc.classList.toggle("active", v === "calendar"); bc.setAttribute("aria-selected", String(v === "calendar")); }
+    [["main-list", "btn-view-list", "list"],
+     ["main-calendar", "btn-view-calendar", "calendar"],
+     ["main-board", "btn-view-board", "board"]].forEach(function (e) {
+      var view = $(e[0]), btn = $(e[1]), on = e[2] === v;
+      if (view) view.hidden = !on;
+      if (btn) { btn.classList.toggle("active", on); btn.setAttribute("aria-selected", String(on)); }
+    });
     render();
   }
 
@@ -779,7 +879,9 @@
       // 每 30s 刷新一次状态（逾期/进行中随时间变化）；弹框打开时不重排，避免打断输入。
       var m = $("task-modal");
       if (m && !m.hidden) return;
-      if (state.ui.view === "list") renderList(); else renderCalendar();
+      if (state.ui.view === "list") renderList();
+      else if (state.ui.view === "calendar") renderCalendar();
+      else renderBoard();
     }, 30000);
   }
 

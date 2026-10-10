@@ -55,11 +55,11 @@ if dupes:
     sys.exit(1)
 print("OK：没有重复的函数声明。")
 
-# ⑤ 关键元素清单（待办插件：工具栏、分组树、双视图、弹框、状态条、导入入口）
+# ⑤ 关键元素清单（待办插件：工具栏、分组树、三视图、弹框、状态条、导入入口）
 CRITICAL = [
-    "app", "search-input", "btn-view-list", "btn-view-calendar", "btn-add-task",
+    "app", "search-input", "btn-view-list", "btn-view-calendar", "btn-view-board", "btn-add-task",
     "btn-more", "more-menu", "btn-add-group", "btn-import", "btn-export",
-    "group-tree", "main-list", "list-content", "main-calendar", "cal-grid",
+    "group-tree", "main-list", "list-content", "main-calendar", "main-board", "cal-grid",
     "store-status", "store-text", "task-modal", "task-form", "f-title", "f-group",
     "f-priority", "f-start", "f-due", "btn-add-sub", "f-subtasks", "btn-save-task",
     "toast", "file-input",

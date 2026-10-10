@@ -33,6 +33,7 @@
       <div class="view-toggle" role="tablist" aria-label="视图切换">
         <button id="btn-view-list" class="vt-btn active" type="button" role="tab" aria-selected="true">列表</button>
         <button id="btn-view-calendar" class="vt-btn" type="button" role="tab" aria-selected="false">日历</button>
+        <button id="btn-view-board" class="vt-btn" type="button" role="tab" aria-selected="false">执行</button>
       </div>
 
       <div class="topbar-actions">
@@ -98,6 +99,11 @@
           </div>
           <div id="cal-weekdays" class="cal-weekdays"></div>
           <div id="cal-grid" class="cal-grid"></div>
+        </section>
+
+        <!-- 执行视图（看板） -->
+        <section id="main-board" class="view" hidden>
+          <div id="board-content" class="board-content"></div>
         </section>
       </main>
     </div>

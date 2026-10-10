@@ -238,7 +238,7 @@ checks.push(
   ["app.js 没有对缺失元素直接取属性", dangling.length === 0, dangling.join(",")],
   ["app.js 捕获页面级未处理异常", apCode.includes("unhandledrejection") && apCode.includes('window.addEventListener("error"')],
   ["app.js 不再用 dbxPlugin.ready 卡住启动", !/dbxPlugin\.ready\.then\(boot\)/.test(apCode)],
-  ["双视图切换在 HTML 里（btn-view-list / btn-view-calendar）",
+  ["三视图切换在 HTML 里（list / calendar / board）",
     liveIds.has("btn-view-list") && liveIds.has("btn-view-calendar")],
   ["「更多」菜单（btn-more / more-menu）在 HTML 里且能展开/收起",
     liveIds.has("btn-more") && liveIds.has("more-menu") &&

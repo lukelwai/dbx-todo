@@ -38,7 +38,7 @@ import (
 // pluginVersion 只是兜底；运行时以包内 manifest.json 的版本为准（见 resolveMetadata）。
 const (
 	pluginID      = "com.lwai.todo"
-	pluginVersion = "0.1.4"
+	pluginVersion = "0.1.5"
 )
 
 type plugin struct {
@@ -419,7 +419,23 @@ type TodoDoc struct {
 // Windows 实测（打包探针环境）首次建库偶发 SQLITE_READONLY，疑似杀软/索引器
 // 短暂锁住刚创建的 .db 文件所致：busy_timeout 缓解锁竞争，migrate 失败重试一次
 // 覆盖瞬态；错误信息带库路径与语句序号，便于远程定位。
+// 全局单例连接：所有 RPC 复用同一 *sql.DB（SetMaxOpenConns(1) 串行化查询），
+// 避免「每次请求新建连接 + defer Close」在 Windows 上引发的 self-lock（SQLITE_BUSY）。
+var (
+	gDBMu sync.Mutex
+	gDB   *sql.DB
+)
+
 func openDB() (*sql.DB, bool, error) {
+	gDBMu.Lock()
+	defer gDBMu.Unlock()
+	if gDB != nil {
+		if err := gDB.Ping(); err == nil {
+			return gDB, false, nil
+		}
+		_ = gDB.Close()
+		gDB = nil
+	}
 	dir := todoMetaDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, false, fmt.Errorf("创建 .todo 目录失败：%w", err)
@@ -455,7 +471,8 @@ func openDB() (*sql.DB, bool, error) {
 		_ = db.Close()
 		return nil, false, fmt.Errorf("%w（库路径：%s）", migErr, p)
 	}
-	return db, created, nil
+	gDB = db
+	return gDB, created, nil
 }
 
 func migrateDB(db *sql.DB) error {
@@ -542,7 +559,6 @@ func loadDoc() (TodoDoc, bool, error) {
 	if err != nil {
 		return emptyDoc(), false, err
 	}
-	defer db.Close()
 
 	d := emptyDoc()
 	if err := db.QueryRow(`SELECT CAST(value AS INTEGER) FROM meta WHERE key='rev'`).Scan(&d.Rev); err != nil {
@@ -629,7 +645,6 @@ func saveDocToDB(d TodoDoc) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer db.Close()
 
 	tx, err := db.Begin()
 	if err != nil {
@@ -719,7 +734,6 @@ func currentRev() (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer db.Close()
 	var rev int
 	if err := db.QueryRow(`SELECT CAST(value AS INTEGER) FROM meta WHERE key='rev'`).Scan(&rev); err != nil {
 		return 0, err

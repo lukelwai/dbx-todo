@@ -186,6 +186,10 @@ button { font-family: inherit; }
 }
 .task-card.done .task-title { color: var(--text-3); text-decoration: line-through; }
 .task-row1 { display: flex; align-items: flex-start; gap: 10px; }
+.task-chevron { width: 14px; flex: none; text-align: center; color: var(--text-3); font-size: 11px; margin-top: 3px; transition: transform .15s; user-select: none; }
+.task-row1.expandable { cursor: pointer; border-radius: 6px; transition: background .12s; }
+.task-row1.expandable:hover { background: var(--panel-2); }
+.task-row1.expanded .task-chevron { transform: rotate(90deg); }
 .task-check {
   appearance: none; width: 18px; height: 18px; margin-top: 2px; border: 2px solid var(--text-3);
   border-radius: 50%; cursor: pointer; flex: none; position: relative;
@@ -248,6 +252,40 @@ button { font-family: inherit; }
 .cal-chip.s-overdue { background: color-mix(in srgb, var(--st-overdue) 18%, var(--panel)); }
 .cal-chip.s-done { background: color-mix(in srgb, var(--st-done) 18%, var(--panel)); }
 .cal-more { font-size: 10px; color: var(--text-3); margin-top: 2px; padding-left: 4px; }
+
+/* ===== 执行视图（看板） ===== */
+.board-content {
+  flex: 1; min-height: 0; display: grid; grid-template-columns: repeat(4, 1fr);
+  gap: 12px; padding: 14px 16px 20px; overflow-y: auto;
+}
+.board-col {
+  display: flex; flex-direction: column; min-height: 0;
+  background: var(--panel-2); border-radius: 12px; padding: 8px;
+}
+.board-col-head { display: flex; align-items: center; gap: 8px; padding: 6px 6px 10px; font-weight: 700; font-size: 13px; }
+.board-col-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+.board-col-dot.s-notstarted { background: var(--st-notstarted); }
+.board-col-dot.s-doing { background: var(--st-doing); }
+.board-col-dot.s-overdue { background: var(--st-overdue); }
+.board-col-dot.s-done { background: var(--st-done); }
+.board-col-count { margin-left: auto; font-size: 12px; color: var(--text-3); background: var(--panel); border-radius: 10px; padding: 1px 8px; }
+.board-col-body { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: 2px; }
+.board-card {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+  padding: 10px 11px; box-shadow: 0 1px 2px rgba(0,0,0,.02);
+}
+.board-card.done .bc-title { color: var(--text-3); text-decoration: line-through; }
+.bc-top { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.bc-pri { font-size: 11px; font-weight: 700; }
+.bc-due { margin-left: auto; font-size: 11px; color: var(--text-3); white-space: nowrap; }
+.bc-title { font-weight: 600; font-size: 13px; word-break: break-word; cursor: pointer; }
+.bc-title:hover { color: var(--primary); }
+.bc-desc { font-size: 12px; color: var(--text-2); margin-top: 4px; max-height: 48px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
+.bc-progress { margin-top: 8px; }
+.bc-prog-label { font-size: 11px; color: var(--text-3); margin-top: 3px; }
+.bc-actions { display: flex; gap: 4px; margin-top: 8px; }
+.bc-actions button { border: 0; background: transparent; color: var(--text-3); cursor: pointer; font-size: 12px; padding: 3px 7px; border-radius: 6px; }
+.bc-actions button:hover { background: var(--panel-2); color: var(--text); }
 
 /* ===== 空状态 ===== */
 .empty-state { text-align: center; color: var(--text-3); padding: 60px 20px; }
