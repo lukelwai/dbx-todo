@@ -40,7 +40,7 @@
 
   /* ============ 诊断日志（页面级错误兜底 + 看门狗共用） ============ */
 
-  var UI_VERSION = "0.1.3";   // 打包脚本会校验它与 manifest.version 一致
+  var UI_VERSION = "0.1.4";   // 打包脚本会校验它与 manifest.version 一致
   var T0 = (window.performance && window.performance.now) ? window.performance.now() : Date.now();
   function since() {
     var t = (window.performance && window.performance.now) ? window.performance.now() : Date.now();

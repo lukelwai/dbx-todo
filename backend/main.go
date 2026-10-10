@@ -38,7 +38,7 @@ import (
 // pluginVersion 只是兜底；运行时以包内 manifest.json 的版本为准（见 resolveMetadata）。
 const (
 	pluginID      = "com.lwai.todo"
-	pluginVersion = "0.1.3"
+	pluginVersion = "0.1.4"
 )
 
 type plugin struct {
@@ -415,6 +415,10 @@ type TodoDoc struct {
 
 // openDB 打开（必要时创建）SQLite 数据库并执行迁移。返回值 created 表示
 // 本次调用是否新建了数据库文件，用于向前端标记首次运行（firstRun）。
+//
+// Windows 实测（打包探针环境）首次建库偶发 SQLITE_READONLY，疑似杀软/索引器
+// 短暂锁住刚创建的 .db 文件所致：busy_timeout 缓解锁竞争，migrate 失败重试一次
+// 覆盖瞬态；错误信息带库路径与语句序号，便于远程定位。
 func openDB() (*sql.DB, bool, error) {
 	dir := todoMetaDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -425,15 +429,31 @@ func openDB() (*sql.DB, bool, error) {
 	if _, statErr := os.Stat(p); statErr != nil {
 		created = true
 	}
-	db, err := sql.Open("sqlite", p)
+	db, err := sql.Open("sqlite", p+"?_pragma=busy_timeout(5000)")
 	if err != nil {
 		return nil, false, fmt.Errorf("打开数据库失败：%w", err)
 	}
 	db.SetMaxOpenConns(1)
 	db.SetConnMaxLifetime(0)
-	if err := migrateDB(db); err != nil {
+	var migErr error
+	for attempt := 0; attempt < 2; attempt++ {
+		if migErr = migrateDB(db); migErr == nil {
+			break
+		}
 		_ = db.Close()
-		return nil, false, err
+		if attempt == 0 {
+			time.Sleep(150 * time.Millisecond)
+			db, err = sql.Open("sqlite", p+"?_pragma=busy_timeout(5000)")
+			if err != nil {
+				return nil, false, fmt.Errorf("重开数据库失败：%w", err)
+			}
+			db.SetMaxOpenConns(1)
+			db.SetConnMaxLifetime(0)
+		}
+	}
+	if migErr != nil {
+		_ = db.Close()
+		return nil, false, fmt.Errorf("%w（库路径：%s）", migErr, p)
 	}
 	return db, created, nil
 }
@@ -467,9 +487,9 @@ func migrateDB(db *sql.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_tasks_group ON tasks(group_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_subtasks_task ON subtasks(task_id)`,
 	}
-	for _, s := range stmts {
+	for i, s := range stmts {
 		if _, err := db.Exec(s); err != nil {
-			return fmt.Errorf("migrate: %w", err)
+			return fmt.Errorf("migrate[%d/%d]: %w", i+1, len(stmts), err)
 		}
 	}
 	_, _ = db.Exec(`INSERT OR IGNORE INTO meta(key,value) VALUES('rev','0'),('version','1')`)

@@ -577,17 +577,26 @@
     return out;
   }
 
+  function bytesToBase64(u8) {
+    var bin = "";
+    for (var i = 0; i < u8.length; i++) bin += String.fromCharCode(u8[i]);
+    return btoa(bin);
+  }
+
   function doImport(file) {
     if (!Store) { toast("存储模块未就绪"); return; }
     var reader = new FileReader();
     reader.onload = function () {
-      var text = String(reader.result || "");
+      var text = String(reader.result || "").replace(/^\uFEFF/, "");
       var b64;
       try {
+        // 兼容「包裹格式」{dataBase64:"..."}；导出的备份是裸 JSON 文档，走 else 分支。
         var parsed = JSON.parse(text);
-        b64 = parsed && parsed.dataBase64 ? parsed.dataBase64 : text;
+        b64 = parsed && typeof parsed.dataBase64 === "string" && parsed.dataBase64
+          ? parsed.dataBase64
+          : bytesToBase64(new TextEncoder().encode(text));
       } catch (e) {
-        b64 = text;
+        b64 = bytesToBase64(new TextEncoder().encode(text));
       }
       Store.invoke("todos/import", { dataBase64: b64 }).then(function (pl) {
         if (!pl || !pl.ok) { toast("导入失败"); return; }
@@ -673,10 +682,6 @@
       var f = e.target.files && e.target.files[0];
       if (f) doImport(f);
       e.target.value = "";
-    });
-    click("btn-diag", function () {
-      if (Store && Store.report) toast("诊断已打印到控制台");
-      if (Store && Store.report) console.log(Store.report());
     });
 
     // 更多菜单开关
