@@ -249,11 +249,23 @@ checks.push(
   /* ---- 权限与贡献点（刻意保持最小） ---- */
   ["不依赖宿主内置 AI（manifest 未声明 host.ai）",
     Array.isArray(mani.permissions) && !mani.permissions.includes("host.ai"), JSON.stringify(mani.permissions)],
-  ["manifest 刻意不声明 command / menus（会顶掉文件浏览入口，并把最低宿主抬到 0.6.21）",
-    !(mani.contributions || []).some((c) => c.type === "command" || c.type === "menus"),
-    (mani.contributions || []).map((c) => c.type).join(" / ")],
-  ["engines.dbx 保持 >=0.5.68（没有为了新贡献点抬高）",
-    String(mani.engines && mani.engines.dbx) === ">=0.5.68", JSON.stringify(mani.engines)],
+  ["声明了 command / menus 时 engines.dbx 已抬到 >=0.6.21（command/menus 是 0.6.21 引入，老宿主会拒装）",
+    !(mani.contributions || []).some((c) => c.type === "command" || c.type === "menus")
+      || String(mani.engines && mani.engines.dbx) === ">=0.6.21",
+    JSON.stringify(mani.engines)],
+  ["command 的 action 引用了已声明的 workbench（open-workbench 必须指向真实贡献点）",
+    (() => {
+      const wbs = new Set((mani.contributions || []).filter((c) => c.type === "workbench").map((c) => c.id));
+      return (mani.contributions || []).filter((c) => c.type === "command")
+        .every((c) => c.action && c.action.type === "open-workbench" && wbs.has(c.action.workbench));
+    })(), (mani.contributions || []).filter((c) => c.type === "command").map((c) => c.id).join(",")],
+  ["menus 的项引用了已声明的 command 且 location 合法",
+    (() => {
+      const cmds = new Set((mani.contributions || []).filter((c) => c.type === "command").map((c) => c.id));
+      const locs = ["commandPalette", "appToolbar", "appSidebar"];
+      return (mani.contributions || []).filter((c) => c.type === "menus")
+        .every((c) => (c.items || []).every((it) => cmds.has(it.command) && locs.indexOf(it.location) >= 0));
+    })(), (mani.contributions || []).filter((c) => c.type === "menus").map((c) => c.id).join(",")],
   ["本地化键都能对上真实贡献点 id（宿主会把对不上的键判为无效清单）",
     (() => {
       const loc = mani.localizations && mani.localizations.en;

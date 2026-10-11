@@ -3,12 +3,12 @@
   "manifest_version": 1,
   "id": "com.lwai.todo",
   "name": "待办 Todo",
-  "version": "0.1.5",
+  "version": "0.1.8",
   "publisher": "lwai",
   "description": "轻量待办（Todo）插件：分组管理任务，支持优先级、起止时间、子任务与里程碑、完成度进度条，以及列表 / 日历 / 执行（看板）三视图。数据落盘到连接配置里选择的「待办存储目录」下的 .todo/todos.db（SQLite），由侧车写入。",
   "icon": "assets/plugin.svg",
   "engines": {
-    "dbx": ">=0.5.68",
+    "dbx": ">=0.6.21",
     "host_api": "1"
   },
   "permissions": [],
@@ -66,6 +66,37 @@
           }
         }
       ]
+    },
+    {
+      "type": "command",
+      "id": "com.lwai.todo.cmd.main",
+      "label": "待办 Todo",
+      "description": "打开待办工作台",
+      "icon": "assets/plugin.svg",
+      "action": {
+        "type": "open-workbench",
+        "workbench": "com.lwai.todo.main",
+        "presentation": "tab"
+      }
+    },
+    {
+      "type": "menus",
+      "id": "com.lwai.todo.menus.main",
+      "items": [
+        {
+          "location": "appToolbar",
+          "command": "com.lwai.todo.cmd.main",
+          "group": "navigation",
+          "order": 1,
+          "default_visible": true
+        },
+        {
+          "location": "commandPalette",
+          "command": "com.lwai.todo.cmd.main",
+          "group": "navigation",
+          "order": 1
+        }
+      ]
     }
   ],
   "localizations": {
@@ -76,6 +107,13 @@
         "com.lwai.todo.main": {
           "label": "Todo",
           "description": "Todo workbench"
+        },
+        "com.lwai.todo.cmd.main": {
+          "label": "Todo",
+          "description": "Open the Todo workbench"
+        },
+        "com.lwai.todo.menus.main": {
+          "label": "Todo"
         },
         "com.lwai.todo.conn": {
           "label": "Todo",

@@ -179,17 +179,41 @@ if ((mani.permissions || []).indexOf("host.ai") >= 0) {
   process.exit(1);
 }
 
-// (d3b) 贡献点：本插件【刻意不声明】command / menus（侧边栏 / 工具栏 / 命令面板入口）。
-//       实测（mdnotes v0.8.5/v0.8.6）：声明了命令的插件会失去原来的「文件浏览入口」，
-//       且 command/menus 是 0.6.21 才引入，会把最低宿主抬上去。工作台走「连接」或插件详情入口即可。
-const newContribs = (mani.contributions || [])
-  .filter((c) => c.type === "command" || c.type === "menus")
-  .map((c) => c.type);
-if (newContribs.length) {
-  console.error("\n[FATAL] manifest 声明了 " + newContribs.join(" / ") + " 贡献点：本插件刻意不做侧边栏/命令面板入口。");
-  console.error("        ① 有命令的插件会失去原来的「文件浏览入口」；");
-  console.error("        ② 这两个贡献点是 DBX 0.6.21 引入的，声明它会把最低宿主抬到 0.6.21。\n");
-  process.exit(1);
+// (d3b) 贡献点：command / menus 是 DBX 0.6.21 才引入；声明它必须把最低宿主抬到 0.6.21，
+//       否则老宿主会在安装阶段直接拒绝整个包。连接型插件（connection-provider）只有显式声明
+//       的全局命令才会被宿主暴露为快捷入口，因此这里用它做「插件快捷入口」是正确的，且不会
+//       顶掉任何文件浏览入口（本插件没有 filesystem-provider）。
+const contribs = mani.contributions || [];
+const wbIds = new Set(contribs.filter((c) => c.type === "workbench").map((c) => c.id));
+const cmdIds = new Set(contribs.filter((c) => c.type === "command").map((c) => c.id));
+const declaredNew = contribs.filter((c) => c.type === "command" || c.type === "menus");
+if (declaredNew.length) {
+  const eng = String((mani.engines && mani.engines.dbx) || "");
+  if (!/>=0\.6\.21/.test(eng)) {
+    console.error("\n[FATAL] manifest 声明了 command/menus，但 engines.dbx 仍是「" + eng + "」，必须 >=0.6.21（否则老宿主拒装）。\n");
+    process.exit(1);
+  }
+}
+for (const c of contribs) {
+  if (c.type === "command") {
+    const action = c.action || {};
+    if (action.type !== "open-workbench" || !wbIds.has(action.workbench)) {
+      console.error("\n[FATAL] command 贡献点 " + c.id + " 的 action 必须引用已声明的 workbench（当前 workbench 列表：" + [...wbIds].join(", ") + "）。\n");
+      process.exit(1);
+    }
+  }
+  if (c.type === "menus") {
+    (c.items || []).forEach((it, i) => {
+      if (!cmdIds.has(it.command)) {
+        console.error("\n[FATAL] menus 贡献点 " + c.id + " 的第 " + (i + 1) + " 项引用的 command「" + it.command + "」未声明。\n");
+        process.exit(1);
+      }
+      if (["commandPalette", "appToolbar", "appSidebar"].indexOf(it.location) < 0) {
+        console.error("\n[FATAL] menus 贡献点 " + c.id + " 的第 " + (i + 1) + " 项 location 必须是 commandPalette/appToolbar/appSidebar。\n");
+        process.exit(1);
+      }
+    });
+  }
 }
 
 // (d4) .dbx-store.json 的 permissions / name 必须与 manifest 一致，否则商店会拒绝。

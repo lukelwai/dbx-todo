@@ -102,8 +102,12 @@
   var state = {
     groups: [],
     tasks: [],
-    ui: { view: "list", search: "", status: "all", priority: "all", sort: "created", group: null, collapsed: {}, calYear: 0, calMonth: 0 }
+    ui: {
+      view: "list", search: "", status: "all", priority: "all", sort: "created", group: null,
+      collapsed: {}, openTasks: {}, boardCollapsed: {}, boardOpen: {}, calYear: 0, calMonth: 0
+    }
   };
+  var calByDay = {};   // 日历：dayKey -> 当天任务数组（供「查看全部」弹框读取）
   var editingId = null;
   var modalSubs = [];
   var statusTick = null;
@@ -290,6 +294,7 @@
     var st = taskStatus(t, now);
     var pr = t.priority || "medium";
     var prog = progressOf(t);
+    var open = !!state.ui.openTasks[t.id];
 
     var meta = h("div", { class: "task-meta" }, [
       h("span", { class: "badge st st-" + st }, STATUS_LABEL[st]),
@@ -316,7 +321,7 @@
     ]);
 
     var detailId = "detail-" + t.id;
-    var detail = h("div", { class: "task-detail", id: detailId, hidden: true });
+    var detail = h("div", { class: "task-detail", id: detailId, hidden: !open });
     detail.appendChild(h("div", { class: "task-desc" }, t.description || "（无描述）"));
     if (prog.total > 0) {
       var sl = h("div", { class: "subtask-list" });
@@ -332,7 +337,7 @@
 
     var hasDesc = !!(t.description && t.description.trim());
     var expandable = hasDesc || prog.total > 0;
-    var rowProps = { class: "task-row1" + (expandable ? " expandable" : "") };
+    var rowProps = { class: "task-row1" + (expandable ? " expandable" : "") + (open ? " expanded" : "") };
     if (expandable) rowProps.dataset = { toggle: t.id };
     var rowKids = [];
     if (expandable) rowKids.push(h("span", { class: "task-chevron" }, "▸"));
@@ -374,25 +379,34 @@
       var isToday = key === todayKey;
 
       var cellChildren = [h("div", { class: "cal-daynum" }, String(d.getDate()))];
-      var dayTasks = state.tasks.filter(function (t) {
+      var all = baseFiltered();
+      var dayTasks = all.filter(function (t) {
         var k = dayKeyOf(t.dueAt) || dayKeyOf(t.startAt) || dayKeyOf(t.createdAt);
         return k === key;
       });
+      calByDay[key] = dayTasks;
+      var chipsWrap = h("div", { class: "cal-chips" });
       var shown = dayTasks.slice(0, 3);
       shown.forEach(function (t) {
         var st = taskStatus(t, d.getTime());
-        cellChildren.push(h("button", {
+        chipsWrap.appendChild(h("button", {
           class: "cal-chip s-" + st, type: "button", dataset: { open: t.id },
           title: t.title
         }, [h("span", { class: "dot", style: "background:var(--st-" + st + ")" }), (t.title || "（无标题）")]));
       });
-      if (dayTasks.length > 3) cellChildren.push(h("div", { class: "cal-more" }, "+" + (dayTasks.length - 3) + " 更多"));
+      cellChildren.push(chipsWrap);
+      if (dayTasks.length > 3) cellChildren.push(h("button", {
+        class: "cal-more-btn", type: "button", dataset: { allday: key }, title: "查看全部"
+      }, "+" + (dayTasks.length - 3) + " 更多"));
 
       grid.appendChild(h("div", {
         class: "cal-cell" + (isOther ? " other" : "") + (isToday ? " today" : ""),
         dataset: { cell: key },
         onClick: function (ev) {
-          if (ev.target && ev.target.closest && ev.target.closest(".cal-chip")) return;
+          if (ev.target && ev.target.closest) {
+            if (ev.target.closest(".cal-chip")) return;
+            if (ev.target.closest("[data-allday]")) return;
+          }
           var ds = ev.currentTarget.dataset;
           var cdate = ds.cell;
           openTaskModal(null, { due: cdate + "T09:00", group: state.ui.group });
@@ -401,9 +415,57 @@
     }
   }
 
+  /* ============ 日历「查看全部」弹框 ============ */
+  function openDayModal(key) {
+    var list = calByDay[key] || [];
+    var d = new Date(key + "T00:00:00");
+    var week = isNaN(d.getTime()) ? "" : "（" + ["日", "一", "二", "三", "四", "五", "六"][d.getDay()] + "）";
+    var title = "当日任务 · " + fmtDate(key) + week;
+    var body = h("div", { class: "day-modal-list" });
+    if (list.length === 0) {
+      body.appendChild(h("div", { class: "day-modal-empty" }, "这一天没有任务"));
+    } else {
+      var now = Date.now();
+      list.forEach(function (t) {
+        var st = taskStatus(t, now);
+        body.appendChild(h("button", {
+          class: "day-modal-row" + (t.done ? " done" : ""), type: "button", dataset: { open: t.id }
+        }, [
+          h("span", { class: "dot", style: "background:var(--st-" + st + ")" }),
+          h("span", { class: "dm-title" }, t.title || "（无标题）"),
+          h("span", { class: "badge st st-" + st }, STATUS_LABEL[st])
+        ]));
+      });
+    }
+    var box = overlayBox([
+      h("div", { class: "modal-card", style: "width:min(440px,92vw)" }, [
+        h("div", { class: "modal-head" }, [
+          h("h2", null, title),
+          h("button", { class: "icon-btn", type: "button", dataset: { close: "1" } }, "✕")
+        ]),
+        h("div", { class: "modal-body" }, [body])
+      ])
+    ]);
+    body.addEventListener("click", function (ev) {
+      var row = ev.target.closest ? ev.target.closest("[data-open]") : null;
+      if (row && row.dataset && row.dataset.open) { removeBox(box); openTaskModal(row.dataset.open); }
+    });
+  }
+
   /* ============ 执行视图（看板） ============ */
   function renderBoard() {
     var root = $("board-content"); if (!root) return;
+    var savedTop = root.scrollTop;
+    var savedCols = {};
+    var _bodies = root.querySelectorAll(".board-col-body");
+    for (var _i = 0; _i < _bodies.length; _i++) {
+      var _col = _bodies[_i].parentNode;
+      var _ck = _col && _col.dataset ? _col.dataset.col : null;
+      if (_ck != null) savedCols[_ck] = _bodies[_i].scrollTop;
+    }
+    if (document.activeElement && document.activeElement !== document.body && root.contains(document.activeElement)) {
+      document.activeElement.blur();
+    }
     root.innerHTML = "";
     if (state.tasks.length === 0) {
       root.appendChild(emptyState("🗒️", "还没有任何任务", "点击右上角「新建任务」创建你的第一个待办。", true));
@@ -431,22 +493,32 @@
         var db = b.dueAt ? new Date(b.dueAt).getTime() : Infinity;
         return da - db;
       });
+      var collapsed = !!state.ui.boardCollapsed[col.key];
       var body = h("div", { class: "board-col-body" });
       items.forEach(function (t) { body.appendChild(boardCard(t, now)); });
-      root.appendChild(h("div", { class: "board-col", dataset: { col: col.key } }, [
+      root.appendChild(h("div", { class: "board-col" + (collapsed ? " collapsed" : ""), dataset: { col: col.key } }, [
         h("div", { class: "board-col-head" }, [
           h("span", { class: "board-col-dot s-" + col.key }),
           h("span", { class: "board-col-title" }, col.label),
-          h("span", { class: "board-col-count" }, String(items.length))
+          h("span", { class: "board-col-count" }, String(items.length)),
+          h("button", { type: "button", class: "bc-col-collapse-btn", dataset: { bccollapse: col.key }, title: collapsed ? "展开列" : "收起列" }, collapsed ? "»" : "«")
         ]),
         body
       ]));
     });
+    root.scrollTop = savedTop;
+    var _newBodies = root.querySelectorAll(".board-col-body");
+    for (var _j = 0; _j < _newBodies.length; _j++) {
+      var _nc = _newBodies[_j].parentNode;
+      var _nk = _nc && _nc.dataset ? _nc.dataset.col : null;
+      if (_nk != null && savedCols[_nk] != null) _newBodies[_j].scrollTop = savedCols[_nk];
+    }
   }
 
   function boardCard(t, now) {
     var pr = t.priority || "medium";
     var prog = progressOf(t);
+    var openSubs = !!state.ui.boardOpen[t.id];
     var kids = [
       h("div", { class: "bc-top" }, [
         h("span", { class: "bc-pri", style: "color:var(--pr-" + pr + ")" }, PRIORITY_LABEL[pr]),
@@ -460,6 +532,17 @@
         h("div", { class: "progress-track" }, [h("div", { class: "progress-fill", style: "width:" + prog.pct + "%" })]),
         h("div", { class: "bc-prog-label" }, prog.done + "/" + prog.total + " 子任务" + (prog.msTotal > 0 ? " · ★" + prog.msDone + "/" + prog.msTotal : ""))
       ]));
+      kids.push(h("button", { type: "button", class: "bc-sub-toggle", dataset: { bcsub: t.id } },
+        (openSubs ? "▾ " : "▸ ") + "子任务 " + prog.done + "/" + prog.total));
+      if (openSubs) {
+        kids.push(h("div", { class: "bc-subs" }, (t.subtasks || []).map(function (s) {
+          return h("label", { class: "bc-sub" + (s.done ? " done" : "") }, [
+            h("input", { class: "st-check", type: "checkbox", checked: !!s.done, dataset: { stid: t.id, sub: s.id } }),
+            h("span", { class: "st-title" }, s.title),
+            (s.isMilestone ? h("span", { class: "ms-tag" }, "★ 里程碑") : null)
+          ]);
+        })));
+      }
     }
     kids.push(h("div", { class: "bc-actions" }, [
       h("button", { type: "button", dataset: { act: "toggle", tid: t.id } }, t.done ? "↩ 重开" : "✓ 完成"),
@@ -809,9 +892,9 @@
       }
       var tog = t.dataset && t.dataset.toggle ? t : (t.closest ? t.closest("[data-toggle]") : null);
       if (tog && tog.dataset && tog.dataset.toggle) {
-        var did = "detail-" + tog.dataset.toggle;
-        var d = $(did);
-        if (d) { d.hidden = !d.hidden; tog.classList.toggle("expanded", !d.hidden); }
+        var ttd = tog.dataset.toggle;
+        state.ui.openTasks[ttd] = !state.ui.openTasks[ttd];
+        renderList();
         return;
       }
     });
@@ -820,6 +903,20 @@
     var bc2 = $("board-content");
     if (bc2) bc2.addEventListener("click", function (ev) {
       var t = ev.target; if (!t) return;
+      var bc = t.dataset && t.dataset.bccollapse ? t : (t.closest ? t.closest("[data-bccollapse]") : null);
+      if (bc && bc.dataset && bc.dataset.bccollapse) {
+        var cid = bc.dataset.bccollapse;
+        state.ui.boardCollapsed[cid] = !state.ui.boardCollapsed[cid];
+        renderBoard();
+        return;
+      }
+      var subToggle = t.dataset && t.dataset.bcsub ? t : (t.closest ? t.closest("[data-bcsub]") : null);
+      if (subToggle && subToggle.dataset && subToggle.dataset.bcsub) {
+        var sid = subToggle.dataset.bcsub;
+        state.ui.boardOpen[sid] = !state.ui.boardOpen[sid];
+        renderBoard();
+        return;
+      }
       var act = t.dataset && t.dataset.act ? t : (t.closest ? t.closest("[data-act]") : null);
       if (act && act.dataset && act.dataset.act) {
         var a = act.dataset.act;
@@ -831,6 +928,10 @@
       var op = t.dataset && t.dataset.open ? t : (t.closest ? t.closest("[data-open]") : null);
       if (op && op.dataset && op.dataset.open) { openTaskModal(op.dataset.open); }
     });
+    if (bc2) bc2.addEventListener("change", function (ev) {
+      var cb = ev.target.closest ? ev.target.closest("input[data-stid]") : null;
+      if (cb && cb.dataset && cb.dataset.stid) { toggleSubtask(cb.dataset.stid, cb.dataset.sub); }
+    });
 
     // 日历翻页
     click("cal-prev", function () { shiftMonth(-1); });
@@ -838,6 +939,8 @@
     click("cal-today", function () { var d = new Date(); state.ui.calYear = d.getFullYear(); state.ui.calMonth = d.getMonth(); renderCalendar(); });
     var cg = $("cal-grid");
     if (cg) cg.addEventListener("click", function (ev) {
+      var moreBtn = ev.target.closest ? ev.target.closest("[data-allday]") : null;
+      if (moreBtn && moreBtn.dataset && moreBtn.dataset.allday) { openDayModal(moreBtn.dataset.allday); return; }
       var chip = ev.target.closest ? ev.target.closest("[data-open]") : null;
       if (chip && chip.dataset && chip.dataset.open) { openTaskModal(chip.dataset.open); return; }
     });

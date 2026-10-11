@@ -38,7 +38,7 @@ import (
 // pluginVersion 只是兜底；运行时以包内 manifest.json 的版本为准（见 resolveMetadata）。
 const (
 	pluginID      = "com.lwai.todo"
-	pluginVersion = "0.1.5"
+	pluginVersion = "0.1.8"
 )
 
 type plugin struct {
@@ -99,11 +99,16 @@ func (plugin *plugin) Handle(
 		}
 		plugin.connections[connectionID] = struct{}{}
 		plugin.mutex.Unlock()
+		oldDir := todoDir()
 		if d := connDirFromValues(values); d != "" {
 			setDir(d)
 		}
+		newDir := todoDir()
 		_ = os.MkdirAll(todoDir(), 0o755)
 		_ = os.MkdirAll(todoMetaDir(), 0o755)
+		if oldDir != newDir {
+			migrateTodoDir(oldDir, newDir)
+		}
 		sidecarTrace(fmt.Sprintf("connection/connect id=%s dir=%s configured=%v",
 			connectionID, todoDir(), dirConfigured()))
 		return map[string]any{
@@ -157,9 +162,14 @@ func (plugin *plugin) Handle(
 		if strings.TrimSpace(dir) == "" {
 			return nil, badParams("dir is empty")
 		}
+		oldDir := todoDir()
 		setDir(dir)
+		newDir := todoDir()
 		_ = os.MkdirAll(todoDir(), 0o755)
 		_ = os.MkdirAll(todoMetaDir(), 0o755)
+		if oldDir != newDir {
+			migrateTodoDir(oldDir, newDir)
+		}
 		return map[string]any{"ok": true, "path": todoDBPath(), "dir": todoDir()}, nil
 
 	case "todos/load":
@@ -331,6 +341,53 @@ func dirConfigured() bool {
 	d := currentDir
 	dirMu.Unlock()
 	return strings.TrimSpace(d) != ""
+}
+
+// migrateTodoDir 把 from 下的 .todo（含 todos.db）整体迁移到 to，仅在 to 还没有
+// 数据库时执行，绝不覆盖 to 已有数据。用于「先全局打开写入兜底目录、后建连接」时，
+// 把孤儿数据收回到连接自己的 storage_dir，避免数据看起来「丢了」。
+func migrateTodoDir(from, to string) {
+	if strings.TrimSpace(from) == "" || strings.TrimSpace(to) == "" || from == to {
+		return
+	}
+	fromDB := filepath.Join(from, ".todo", "todos.db")
+	if _, err := os.Stat(fromDB); err != nil {
+		return // 没有可迁移的数据
+	}
+	toDB := filepath.Join(to, ".todo", "todos.db")
+	if _, err := os.Stat(toDB); err == nil {
+		sidecarTrace(fmt.Sprintf("migrate skip: 目标目录已有数据库 from=%s to=%s", from, to))
+		return // 目标已有数据，不覆盖
+	}
+	if err := os.MkdirAll(filepath.Join(to, ".todo"), 0o755); err != nil {
+		sidecarTrace(fmt.Sprintf("migrate 失败(建目录): %v", err))
+		return
+	}
+	if err := os.Rename(filepath.Join(from, ".todo"), filepath.Join(to, ".todo")); err != nil {
+		sidecarTrace(fmt.Sprintf("migrate 失败(重命名): %v", err))
+		return
+	}
+	sidecarTrace(fmt.Sprintf("migrate ok: %s -> %s", from, to))
+}
+
+// loadConfigDir 在侧车启动时把上一次连接写入的 storage_dir 还原进 currentDir。
+// setDir 只【写】config.json 从不【读】，导致跨进程重启后 currentDir 回到空，
+// 数据库被解析到插件数据目录的兜底位置（空库），连接数据「消失」。
+func loadConfigDir() {
+	b, err := os.ReadFile(filepath.Join(dataDir(), "config.json"))
+	if err != nil {
+		return
+	}
+	var m map[string]any
+	if json.Unmarshal(b, &m) != nil {
+		return
+	}
+	if d, ok := m["storage_dir"].(string); ok && strings.TrimSpace(d) != "" {
+		dirMu.Lock()
+		currentDir = strings.TrimSpace(d)
+		dirMu.Unlock()
+		sidecarTrace(fmt.Sprintf("loadConfigDir: 还原 storage_dir=%s", currentDir))
+	}
 }
 
 func connDirFromValues(values map[string]any) string {
@@ -1029,6 +1086,7 @@ func resolveMetadata() dbxpluginsdk.Metadata {
 
 func main() {
 	_ = os.MkdirAll(dataDir(), 0o755)
+	loadConfigDir()
 	_ = os.MkdirAll(todoMetaDir(), 0o755)
 	cwd, _ := os.Getwd()
 	sidecarTrace(fmt.Sprintf("start pid=%d dataDir=%s configured=%v dir=%s cwd=%s",
