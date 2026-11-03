@@ -1074,6 +1074,8 @@
 
   /* ============ 分组操作 ============ */
   function addGroup(parentId) {
+    // 只有真实分组 id 才算父分组；click()/on() 可能把事件对象传进来。
+    if (typeof parentId !== "string") { parentId = ""; }
     var isChild = !!parentId;
     promptDialog(isChild ? "新建子文件夹" : "新建分组", isChild ? "请输入子文件夹名称：" : "请输入分组名称：", isChild ? "新子文件夹" : "默认分组", "创建", function (name) {
       name = (name || "").trim();
@@ -1251,8 +1253,10 @@
     click("btn-add-record", function () { openRecordModal(null); });
     on("search-input", "input", function (e) { state.ui.search = e.target.value; state.ui.listPage = 1; if (state.ui.view === "list") renderList(); });
     click("btn-add-task", function () { openTaskModal(null); });
-    click("btn-add-group", addGroup);
-    click("btn-add-group-mini", addGroup);
+    // click() 会把事件对象作为第一个实参传给回调，这里必须用闭包隔掉，
+    // 否则 addGroup(parentId) 收到的是 MouseEvent。
+    click("btn-add-group", function () { addGroup(); });
+    click("btn-add-group-mini", function () { addGroup(); });
     click("btn-add-tag-mini", function () {
       promptDialog("新建标签", "标签名称：", "", "创建", function (name) {
         name = (name || "").trim();
