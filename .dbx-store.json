@@ -7,5 +7,5 @@
   "source": "https://github.com/lukelwai/dbx-todo",
   "homepage": "https://github.com/lukelwai/dbx-todo",
   "license": "Apache-2.0",
-  "releaseNotes": "修复记录模式无法滚动查看问题，重构列表模式和记录模式的查看方式增加分页。"
+  "releaseNotes": "修复新建分组无响应问题，修正文件夹描述为分组。"
 }

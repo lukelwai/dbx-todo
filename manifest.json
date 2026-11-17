@@ -3,7 +3,7 @@
   "manifest_version": 1,
   "id": "com.lwai.todo",
   "name": "待办 Todo",
-  "version": "0.1.20",
+  "version": "0.1.21",
   "publisher": "lwai",
   "description": "轻量待办（Todo）插件：分组管理任务，支持优先级、起止时间、子任务与里程碑、完成度进度条、完成备注（记录看似完成但还有后续的内容），以及列表 / 日历 / 执行（看板）三视图。另含独立的「记录」视图用于收纳碎片内容（标题 + 内容 + 日期），并在日历中与任务一起展示。数据落盘到连接配置里选择的「待办存储目录」下的 .todo/todos.db（SQLite），由侧车写入。",
   "icon": "assets/plugin.svg",
@@ -60,7 +60,7 @@
           "required": true,
           "default": "",
           "placeholder": "例如：D:\\todo",
-          "description": "必填。侧车会把所有分组 / 任务 / 子任务写入该目录下的 .todo/todos.db（SQLite 数据库）。点击右侧文件夹按钮选择本地目录，或手动填写绝对路径。",
+          "description": "必填。侧车会把所有分组 / 任务 / 子任务写入该目录下的 .todo/todos.db（SQLite 数据库）。点击右侧目录按钮选择本地目录，或手动填写绝对路径。",
           "picker": {
             "kind": "directory"
           }

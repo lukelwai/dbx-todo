@@ -123,7 +123,7 @@
   function findTask(id) { for (var i = 0; i < state.tasks.length; i++) { if (state.tasks[i].id === id) return state.tasks[i]; } return null; }
   function findGroup(id) { for (var i = 0; i < state.groups.length; i++) { if (state.groups[i].id === id) return state.groups[i]; } return null; }
 
-  // ---- 分组树辅助（多层级文件夹） ----
+  // ---- 分组树辅助（多层级分组） ----
   function childGroups(parentId) {
     return state.groups.filter(function (g) { return (g.parentId || "") === parentId; })
       .sort(function (a, b) { return (a.order || 0) - (b.order || 0); });
@@ -214,7 +214,7 @@
     el.textContent = "存储：" + backend + dir + (s.rev ? " · rev " + s.rev : "");
   }
 
-  /* ============ 侧边栏：分组树（多层级文件夹） ============ */
+  /* ============ 侧边栏：分组树（多层级分组） ============ */
   function renderSidebar() {
     var tree = $("group-tree"); if (!tree) return;
     tree.innerHTML = "";
@@ -255,7 +255,7 @@
       h("span", { class: "group-name", dataset: { rename: g.id } }, g.name),
       h("span", { class: "group-count" }, String(groupTotalCount(g.id))),
       h("span", { class: "group-actions" }, [
-        h("button", { type: "button", title: "新建子文件夹", dataset: { act: "add", gid: g.id }, onClick: function (ev) { ev.stopPropagation(); addGroup(g.id); } }, "＋"),
+        h("button", { type: "button", title: "新建子分组", dataset: { act: "add", gid: g.id }, onClick: function (ev) { ev.stopPropagation(); addGroup(g.id); } }, "＋"),
         h("button", { type: "button", title: "重命名", dataset: { act: "rename", gid: g.id }, onClick: function (ev) { ev.stopPropagation(); startRename(g.id); } }, "✎"),
         h("button", { type: "button", title: "删除", dataset: { act: "del", gid: g.id }, onClick: function (ev) { ev.stopPropagation(); deleteGroup(g.id); } }, "🗑")
       ])
@@ -1075,7 +1075,7 @@
   /* ============ 分组操作 ============ */
   function addGroup(parentId) {
     var isChild = !!parentId;
-    promptDialog(isChild ? "新建子文件夹" : "新建分组", isChild ? "请输入子文件夹名称：" : "请输入分组名称：", isChild ? "新子文件夹" : "默认分组", "创建", function (name) {
+    promptDialog(isChild ? "新建子分组" : "新建分组", isChild ? "请输入子分组名称：" : "请输入分组名称：", isChild ? "新子分组" : "默认分组", "创建", function (name) {
       name = (name || "").trim();
       if (!name) return;
       var order = childGroups(parentId || "").length;
@@ -1100,7 +1100,7 @@
   function deleteGroup(gid) {
     var g = findGroup(gid); if (!g) return;
     if (state.groups.length <= 1) { toast("至少保留一个分组"); return; }
-    if (!groupIsEmpty(gid)) { toast("文件夹非空，请先清空其中的任务与子文件夹"); return; }
+    if (!groupIsEmpty(gid)) { toast("分组非空，请先清空其中的任务与子分组"); return; }
     state.groups = state.groups.filter(function (x) { return x.id !== gid; });
     if (state.ui.group === gid) state.ui.group = null;
     if (state.ui.groupExpanded[gid]) delete state.ui.groupExpanded[gid];
@@ -1251,8 +1251,8 @@
     click("btn-add-record", function () { openRecordModal(null); });
     on("search-input", "input", function (e) { state.ui.search = e.target.value; state.ui.listPage = 1; if (state.ui.view === "list") renderList(); });
     click("btn-add-task", function () { openTaskModal(null); });
-    click("btn-add-group", addGroup);
-    click("btn-add-group-mini", addGroup);
+    click("btn-add-group", function () { addGroup(); });
+    click("btn-add-group-mini", function () { addGroup(); });
     click("btn-add-tag-mini", function () {
       promptDialog("新建标签", "标签名称：", "", "创建", function (name) {
         name = (name || "").trim();
